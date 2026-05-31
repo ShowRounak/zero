@@ -1,50 +1,93 @@
 # Provider catalog definitions
 
 Provider catalog entries are TOML files in `src/providers/catalog/definitions`.
-Use one definition file for each first-party provider, gateway, or local
-endpoint.
+Use one definition file for each API provider, gateway, or local endpoint.
 
-Global model metadata belongs in `src/providers/catalog/models`; gateway and
-local definitions should normally reference those models with `globalModelId`
-instead of adding new model files.
+A top-level provider is the company or service that self-publishes a model
+family. Examples: OpenAI publishes GPT and o-series models, Anthropic publishes
+Claude and Opus/Sonnet models, Google publishes Gemini models, and DeepSeek
+publishes DeepSeek models.
 
-## File selection
+Gateways and hosted proxies do not own those global model families. They expose
+routes to models owned by top-level providers, so their catalog entries should
+usually reference global models with `globalModelId`.
 
-| What you're adding | Files to touch |
-|--------------------|----------------|
-| First-party provider with no new global models | `definitions/<provider>.toml` |
-| First-party provider with owned global models | `definitions/<provider>.toml` and `models/<family>.toml` |
-| Gateway or hosted proxy | `definitions/<gateway>.toml` |
-| Local endpoint such as Ollama | `definitions/<local>.toml` |
+## Pick The Right File
 
-## Top-level provider fields
+| What you're adding | Files to touch | Brand/provider examples |
+|--------------------|----------------|-------------------------|
+| Top-level provider with no new global models | `definitions/<provider>.toml` | OpenAI after GPT models already exist, Anthropic after Claude models already exist |
+| Top-level provider with owned global models | `definitions/<provider>.toml` and `models/<family>.toml` | OpenAI + GPT/o-series, Anthropic + Claude/Opus, Google + Gemini, DeepSeek + DeepSeek |
+| Gateway or hosted proxy | `definitions/<gateway>.toml` | OpenRouter, OpenGateway, Groq |
+| Local endpoint | `definitions/<local>.toml` | Ollama, LM Studio |
 
-Every provider definition must include `id`, `name`, `kind`, `description`,
-`baseURL`, and `defaultModel`.
+## Recommended Shape
 
-Declare credential env vars once with top-level `credentialEnvVars`. The catalog
-normalizer copies that value into setup, validation, and preset metadata for
-runtime consumers.
+Keep credential env vars at the provider top level:
 
-| Field | Required | Accepted values or behavior |
-|-------|----------|-----------------------------|
-| `id` | Yes | Stable provider ID. |
-| `name` | Yes | Human-readable provider name. |
-| `kind` | Yes | `provider`, `gateway`, or `localhost`. |
-| `description` | Yes | Short provider description. |
-| `baseURL` | Yes | Provider API base URL. |
-| `defaultModel` | Yes | Model used when the user does not choose one. |
-| `category` | No | `local`, `hosted`, or `aggregating`. |
-| `vendorId` | No | Inherits another provider's `transportConfig` when this definition omits one. |
-| `isFirstParty` | No | Adds owned global models from `models/*.toml` to this provider's model list. |
-| `supportsModelRouting` | No | Metadata for providers that can route multiple model families. |
-| `apiKeyLabel` / `apiKeyPlaceholder` | No | UI labels for credential entry. |
-| `apiKeyRequired` | No | `false` for local/no-auth providers; otherwise defaults from `setup.requiresAuth`. |
-| `credentialEnvVars` | No | Canonical env vars that may contain provider credentials. |
+```toml
+credentialEnvVars = ["OPENAI_API_KEY"]
+```
+
+The catalog normalizer copies that value into setup, validation, and preset
+metadata for runtime consumers. Do not repeat the same env var in every section.
+
+Keep these nested objects inside one TOML block with dotted keys:
+
+```toml
+[transportConfig]
+kind = "openai-compatible"
+authHeader.name = "authorization"
+headers.X-Trace-Source = "zero"
+
+[catalog]
+source = "hybrid"
+discovery.kind = "openai-compatible"
+
+[preset]
+id = "my-provider"
+badge.text = "HOSTED"
+```
+
+Use provider-level `costCurrency` for pricing currency. Individual provider
+model routes can define numeric `cost.*` fields, but global model files should
+not define pricing.
+
+## Required Provider Fields
+
+Every definition needs these top-level fields:
+
+| Field | Purpose |
+|-------|---------|
+| `id` | Stable provider ID. |
+| `name` | Human-readable provider name. |
+| `kind` | `provider`, `gateway`, or `localhost`. |
+| `description` | Short provider description. |
+| `baseURL` | Provider API base URL. |
+| `defaultModel` | Model used when the user does not choose one. |
+
+## Common Optional Fields
+
+| Field | Purpose |
+|-------|---------|
+| `category` | `local`, `hosted`, or `aggregating`. |
+| `vendorId` | Inherit another provider's `transportConfig` when this definition omits one. |
+| `isFirstParty` | Auto-add owned global models from `models/*.toml`; use this for top-level providers. |
+| `supportsModelRouting` | Marks providers that can route multiple model families. |
+| `apiKeyLabel` / `apiKeyPlaceholder` | UI labels for credential entry. |
+| `apiKeyRequired` | `false` for local/no-auth providers; otherwise defaults from `setup.requiresAuth`. |
+| `credentialEnvVars` | Canonical env vars that may contain provider credentials. |
+| `costCurrency` | Currency code for provider-level model pricing, such as `USD`. |
 
 ## Setup
 
-`setup` describes how `/provider` should ask for credentials.
+Use setup for credential flow metadata:
+
+```toml
+[setup]
+requiresAuth = true
+authMode = "api-key"
+```
 
 | Field | Required | Accepted values or behavior |
 |-------|----------|-----------------------------|
@@ -55,7 +98,15 @@ runtime consumers.
 
 ## Validation
 
-`validation` currently supports credential-env checks.
+Use validation when Zero should check credentials or match configured provider
+URLs:
+
+```toml
+[validation]
+kind = "credential-env"
+missingCredentialMessage = "An API key is required."
+matchBaseUrlHosts = ["api.example.com"]
+```
 
 | Field | Required | Accepted values or behavior |
 |-------|----------|-----------------------------|
@@ -64,15 +115,20 @@ runtime consumers.
 | `missingCredentialMessage` | No | Message shown when required credentials are missing. |
 | `matchBaseUrlHosts` | No | Hostnames used to match an existing provider config. |
 
-## Transport config
+## Transport
 
-Keep `transportConfig`, `transportConfig.authHeader`, and
-`transportConfig.headers` in one `[transportConfig]` block with dotted keys.
+OpenAI-compatible transports are supported at runtime. Anthropic-compatible
+descriptors are recognized by the catalog, but runtime creation currently
+rejects them until that transport is implemented.
 
-`transportConfig.kind` accepts `openai-compatible` and
-`anthropic-compatible`. OpenAI-compatible providers are supported at runtime.
-Anthropic-compatible descriptors are recognized by the catalog, but runtime
-creation currently rejects them until that transport is implemented.
+```toml
+[transportConfig]
+kind = "openai-compatible"
+maxTokensField = "max_completion_tokens"
+removeBodyFields = ["store", "stream_options"]
+authHeader.name = "authorization"
+authHeader.scheme = "bearer"
+```
 
 | Field | Required | Accepted values or behavior |
 |-------|----------|-----------------------------|
@@ -89,10 +145,20 @@ For runtime OpenAI-compatible calls, the OpenAI SDK supplies its normal
 configured. For model discovery, Zero builds fetch headers directly and sends
 the configured auth header when discovery requires auth.
 
-## Model catalog and discovery
+## Catalog And Discovery
 
-Keep `catalog` and `catalog.discovery` in one `[catalog]` block with dotted
-`discovery.*` keys.
+Use `catalog` for static model routes, dynamic discovery, or both:
+
+```toml
+[catalog]
+source = "hybrid"
+discoveryCacheTtl = "1h"
+discoveryRefreshMode = "manual"
+allowManualRefresh = true
+discovery.kind = "openai-compatible"
+discovery.requiresAuth = true
+discovery.path = "/models"
+```
 
 | Field | Required | Accepted values or behavior |
 |-------|----------|-----------------------------|
@@ -109,19 +175,32 @@ OpenAI-compatible discovery accepts either `{ data: [{ id: "..." }] }` or a raw
 array of model IDs/objects. Ollama discovery calls `/api/tags` on the base URL
 without the `/v1` suffix and reads `models[].name`.
 
-## Usage and presets
+## Usage And Presets
 
-`usage` is provider metadata. Set `supported = false` for providers where usage
-accounting should not be expected. `silentlyIgnore = true` suppresses usage
-noise for providers such as local runtimes.
+Use `usage` for usage-accounting metadata:
+
+```toml
+[usage]
+supported = false
+silentlyIgnore = true
+```
 
 | Usage field | Required | Accepted values or behavior |
 |-------------|----------|-----------------------------|
 | `supported` | Yes when `usage` is present | Whether usage accounting is expected for this provider. |
 | `silentlyIgnore` | No | Suppress usage-accounting noise when unsupported. |
 
-Keep `preset` and `preset.badge` in one `[preset]` block with dotted
-`badge.*` keys.
+Use `preset` for setup fallbacks and display metadata:
+
+```toml
+[preset]
+id = "my-provider"
+description = "My Provider hosted models"
+fallbackBaseUrl = "https://api.example.com/v1"
+fallbackModel = "vendor/model-name"
+badge.text = "HOSTED"
+badge.color = "success"
+```
 
 | Preset field | Required | Accepted values or behavior |
 |--------------|----------|-----------------------------|

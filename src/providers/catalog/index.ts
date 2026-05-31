@@ -3,6 +3,7 @@ import { join } from 'path';
 import { parse } from 'smol-toml';
 import type {
   ModelDefinition,
+  ProviderModelDefinition,
   ProviderDefinition,
   ResolvedModelDefinition,
   TransportConfig,
@@ -90,6 +91,9 @@ function isModelDefinition(value: any): value is ModelDefinition {
 }
 
 function validateModelDefinition(model: ModelDefinition): void {
+  if ('cost' in model) {
+    console.warn(`[providers] Global model "${model.id}": cost belongs on provider catalog models, not global models`);
+  }
   if (model.contextWindow != null && typeof model.contextWindow !== 'number') {
     console.warn(`[providers] Model "${model.id}": contextWindow should be a number, got ${typeof model.contextWindow}`);
   }
@@ -102,15 +106,18 @@ function validateModelDefinition(model: ModelDefinition): void {
   if (model.capabilities != null && typeof model.capabilities !== 'object') {
     console.warn(`[providers] Model "${model.id}": capabilities should be an object, got ${typeof model.capabilities}`);
   }
+}
+
+function validateProviderModelDefinition(model: ProviderModelDefinition, providerId: string): void {
   if (model.cost != null) {
     if (typeof model.cost !== 'object') {
-      console.warn(`[providers] Model "${model.id}": cost should be an object, got ${typeof model.cost}`);
+      console.warn(`[providers] Provider "${providerId}" model "${model.id ?? model.globalModelId}": cost should be an object, got ${typeof model.cost}`);
     } else {
       if (typeof model.cost.inputPerMillion !== 'number') {
-        console.warn(`[providers] Model "${model.id}": cost.inputPerMillion should be a number`);
+        console.warn(`[providers] Provider "${providerId}" model "${model.id ?? model.globalModelId}": cost.inputPerMillion should be a number`);
       }
       if (typeof model.cost.outputPerMillion !== 'number') {
-        console.warn(`[providers] Model "${model.id}": cost.outputPerMillion should be a number`);
+        console.warn(`[providers] Provider "${providerId}" model "${model.id ?? model.globalModelId}": cost.outputPerMillion should be a number`);
       }
     }
   }
@@ -121,9 +128,9 @@ function validateModelDefinition(model: ModelDefinition): void {
  * The global model's fields are used as base; the entry's explicit fields override.
  */
 function resolveGlobalModelReference(
-  model: ModelDefinition,
+  model: ProviderModelDefinition,
   globalModelById: Map<string, ModelDefinition>
-): ModelDefinition {
+): ProviderModelDefinition {
   if (!model.globalModelId) return model;
 
   const globalModel = globalModelById.get(model.globalModelId);
@@ -212,7 +219,7 @@ function normalizeDefinition(
 }
 
 export function resolveModel(
-  model: ModelDefinition,
+  model: ProviderModelDefinition,
   definition?: ProviderDefinition
 ): ResolvedModelDefinition {
   return {
@@ -241,6 +248,12 @@ const globalModels = (await readTomlFiles<ModelDefinition>('models'))
 // Validate parsed models
 for (const model of globalModels) {
   validateModelDefinition(model);
+}
+
+for (const definition of definitions) {
+  for (const model of definition.catalog?.models ?? definition.models ?? []) {
+    validateProviderModelDefinition(model, definition.id);
+  }
 }
 
 const definitionById = new Map(definitions.map((definition) => [definition.id, definition]));
@@ -287,7 +300,7 @@ export function getModelsForProvider(definition: ProviderDefinition): ResolvedMo
  */
 export function resolveEffectiveTransportConfig(
   definition: ProviderDefinition,
-  model?: ModelDefinition
+  model?: ProviderModelDefinition
 ): TransportConfig | undefined {
   const base = definition.transportConfig;
   if (!base) return undefined;

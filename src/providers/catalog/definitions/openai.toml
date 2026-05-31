@@ -11,6 +11,7 @@ defaultModel = "gpt-4o"
 isFirstParty = true
 apiKeyRequired = true
 credentialEnvVars = ["OPENAI_API_KEY"]
+costCurrency = "USD"
 
 [setup]
 requiresAuth = true
@@ -27,6 +28,16 @@ allowManualRefresh = true
 discovery.kind = "openai-compatible"
 discovery.requiresAuth = true
 discovery.path = "/models"
+
+[[catalog.models]]
+globalModelId = "gpt-4o"
+cost.inputPerMillion = 2.50
+cost.outputPerMillion = 10.00
+
+[[catalog.models]]
+globalModelId = "gpt-4o-mini"
+cost.inputPerMillion = 0.15
+cost.outputPerMillion = 0.60
 
 [validation]
 kind = "credential-env"

@@ -9,6 +9,7 @@ baseURL = "https://api.groq.com/openai/v1"
 defaultModel = "llama-3.3-70b-versatile"
 apiKeyRequired = true
 credentialEnvVars = ["GROQ_API_KEY"]
+costCurrency = "USD"
 
 [setup]
 requiresAuth = true

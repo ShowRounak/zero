@@ -25,9 +25,12 @@ export interface ModelDefinition {
   maxOutputTokens?: number;
   defaultTemperature?: number;
   temperatureRange?: TemperatureRange;
-  cost?: ModelCost;
   transportOverrides?: Partial<TransportConfig>;
   notes?: string;
+}
+
+export interface ProviderModelDefinition extends ModelDefinition {
+  cost?: ModelCost;
 }
 
 export interface CapabilityFlags {
@@ -50,7 +53,6 @@ export interface ModelCost {
   inputPerMillion: number;
   outputPerMillion: number;
   cachePerMillion?: number;
-  currency?: string;
 }
 
 export interface AuthHeaderConfig {
@@ -79,7 +81,7 @@ export interface ModelCatalogConfig {
   discoveryCacheTtl?: string | number;
   discoveryRefreshMode?: DiscoveryRefreshMode;
   allowManualRefresh?: boolean;
-  models?: ModelDefinition[];
+  models?: ProviderModelDefinition[];
 }
 
 export interface SetupMetadata {
@@ -144,10 +146,11 @@ export interface ProviderDefinition {
   apiKeyPlaceholder?: string;
   apiKeyRequired?: boolean;
   credentialEnvVars?: string[];
-  models?: ModelDefinition[];
+  costCurrency?: string;
+  models?: ProviderModelDefinition[];
 }
 
-export interface ResolvedModelDefinition extends ModelDefinition {
+export interface ResolvedModelDefinition extends ProviderModelDefinition {
   apiName: string;
   providerId?: string;
   providerName?: string;

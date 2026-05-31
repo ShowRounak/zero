@@ -1,13 +1,23 @@
 # Provider model catalog
 
 Global model metadata lives in `src/providers/catalog/models`. Files use TOML
-`[[model]]` entries.
+`[[model]]` entries. Global models describe identity, ownership, limits, and
+capabilities only; all pricing belongs on provider `[[catalog.models]]` route
+entries.
+
+Only top-level providers should add global model metadata. A top-level provider
+self-publishes the model family, such as OpenAI with GPT/o-series, Anthropic
+with Claude/Opus, Google with Gemini, or DeepSeek with DeepSeek models.
 
 Each model entry must stay as one TOML block. Nested model subtables such as
 `[model.cost]`, `[model.capabilities]`, or `[catalog.models.cost]` are not
 allowed; use dotted keys inside the `[[model]]` or `[[catalog.models]]` block.
 
 ## Global model example
+
+Use one `[[model]]` block per global model owned by a top-level provider. Add
+additional models by adding additional `[[model]]` blocks in the same family
+file.
 
 ```toml
 [[model]]
@@ -31,18 +41,30 @@ capabilities.supportsReasoning = false
 capabilities.supportsPreciseTokenCount = true
 capabilities.supportsEmbeddings = false
 capabilities.supportsTemperature = true
-cost.inputPerMillion = 2.50
-cost.outputPerMillion = 10.00
-cost.cachePerMillion = 0.25
-cost.currency = "USD"
 notes = "Optional maintainer note."
+
+[[model]]
+id = "gpt-4o-mini"
+name = "GPT-4o Mini"
+apiName = "gpt-4o-mini"
+ownerProviderId = "openai"
+tier = "first-party"
+description = "OpenAI small multimodal model"
+classification = ["chat", "vision"]
+contextWindow = 128000
+maxOutputTokens = 16384
+capabilities.supportsVision = true
+capabilities.supportsStreaming = true
+capabilities.supportsFunctionCalling = true
+capabilities.supportsJsonMode = true
+capabilities.supportsReasoning = false
 ```
 
 ## Model fields
 
 Global `[[model]]` entries and provider `[[catalog.models]]` entries share the
-same shape. Provider entries may define local models directly, or reference a
-global model with `globalModelId` and override route-specific fields.
+identity, capability, and limit fields below. Provider entries may also define
+route-specific pricing with `cost.*`.
 
 | Field | Required | Accepted values or behavior |
 |-------|----------|-----------------------------|
@@ -59,18 +81,19 @@ global model with `globalModelId` and override route-specific fields.
 | `defaultTemperature` | No | Suggested temperature default. |
 | `temperatureRange.min` / `temperatureRange.max` | No | Supported temperature bounds. |
 | `capabilities.*` | No | Feature flags listed below. |
-| `cost.inputPerMillion` / `cost.outputPerMillion` | Yes when `cost` is present | Pricing per one million input and output tokens. |
-| `cost.cachePerMillion` / `cost.currency` | No | Optional cached-token price and currency code. |
 | `transportOverrides.*` | No | Per-model transport overrides merged over provider `transportConfig`. |
 | `notes` | No | Free-form maintainer note. |
 
-## Gateway model overrides
+## Provider model pricing and overrides
 
-When a gateway exposes a global model under a provider-specific name, limit, or
-price, keep those route-specific values in that gateway's single
-`[[catalog.models]]` block:
+When a provider or gateway exposes a global model under a provider-specific
+name, limit, or price, keep those route-specific values in that provider's
+single `[[catalog.models]]` block. Put the shared pricing currency once at the
+provider top level with `costCurrency`.
 
 ```toml
+costCurrency = "USD"
+
 [[catalog.models]]
 globalModelId = "claude-sonnet-4"
 apiName = "anthropic/claude-sonnet-4"
@@ -80,9 +103,16 @@ capabilities.supportsReasoning = true
 cost.inputPerMillion = 3.00
 cost.outputPerMillion = 15.00
 cost.cachePerMillion = 0.30
-cost.currency = "USD"
 transportOverrides.maxTokensField = "max_tokens"
 transportOverrides.removeBodyFields = ["store"]
+
+[[catalog.models]]
+globalModelId = "deepseek-v3"
+apiName = "deepseek/deepseek-chat"
+contextWindow = 65536
+maxOutputTokens = 8192
+cost.inputPerMillion = 0.14
+cost.outputPerMillion = 0.28
 ```
 
 `capabilities` flags are `supportsVision`, `supportsStreaming`,
@@ -90,8 +120,9 @@ transportOverrides.removeBodyFields = ["store"]
 `supportsPreciseTokenCount`, `supportsEmbeddings`, and
 `supportsTemperature`.
 
-`cost` requires `inputPerMillion` and `outputPerMillion` when present.
-`cachePerMillion` and `currency` are optional.
+Provider model `cost` requires `inputPerMillion` and `outputPerMillion` when
+present. `cachePerMillion` is optional. Do not put `cost` or `costCurrency` in
+global model files.
 
 `transportOverrides` accepts the same fields as `transportConfig`. Header
 overrides are merged with provider headers, and `removeBodyFields` is unioned

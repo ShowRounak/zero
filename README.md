@@ -24,6 +24,11 @@ Provider, gateway, and local endpoint catalog entries live in
 `src/providers/catalog/definitions`. Global model metadata lives in
 `src/providers/catalog/models`.
 
+Top-level providers are services that self-publish model families, such as
+OpenAI with GPT/o-series, Anthropic with Claude/Opus, Google with Gemini, and
+DeepSeek with DeepSeek models. Gateways should usually reference those global
+models instead of redefining them.
+
 Minimal gateway example:
 
 ```toml
@@ -36,6 +41,7 @@ baseURL = "https://api.example.com/v1"
 defaultModel = "vendor/model-name"
 apiKeyRequired = true
 credentialEnvVars = ["MY_GATEWAY_API_KEY"]
+costCurrency = "USD"
 
 [setup]
 requiresAuth = true
@@ -65,7 +71,14 @@ contextWindow = 32000
 maxOutputTokens = 4096
 cost.inputPerMillion = 2.50
 cost.outputPerMillion = 10.00
-cost.currency = "USD"
+
+[[catalog.models]]
+globalModelId = "claude-sonnet-4"
+apiName = "anthropic/claude-sonnet-4"
+contextWindow = 200000
+maxOutputTokens = 64000
+cost.inputPerMillion = 3.00
+cost.outputPerMillion = 15.00
 ```
 
 Detailed docs:

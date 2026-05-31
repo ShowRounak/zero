@@ -49,7 +49,6 @@ function catalogTomlFiles(): string[] {
     ...readdirSync(modelsDir)
       .filter((file) => file.endsWith('.toml'))
       .map((file) => join(modelsDir, file)),
-    join(import.meta.dir, '..', 'example-model-addition.toml'),
   ];
 }
 
@@ -102,6 +101,8 @@ describe('provider catalog', () => {
     const modelDocs = readFileSync(join(import.meta.dir, '..', 'docs', 'provider-catalog', 'models.md'), 'utf-8');
 
     expect(modelDocs).toContain('entry must stay as one TOML block');
+    expect(modelDocs).toContain('Global models describe identity, ownership, limits, and');
+    expect(modelDocs.match(/\[\[model\]\]/g)?.length).toBeGreaterThanOrEqual(2);
     expect(modelDocs).toContain('contextWindow');
     expect(modelDocs).toContain('maxOutputTokens');
     expect(modelDocs).toContain('temperatureRange.min');
@@ -111,8 +112,11 @@ describe('provider catalog', () => {
     expect(modelDocs).toContain('cost.cachePerMillion');
     expect(modelDocs).toContain('capabilities.supportsVision');
     expect(modelDocs).toContain('transportOverrides.maxTokensField');
+    expect(modelDocs).toContain('costCurrency');
+    expect(modelDocs).toContain('Do not put `cost` or `costCurrency` in');
     expect(modelDocs).toContain('| Field | Required | Accepted values or behavior |');
     expect(modelDocs).not.toMatch(/^\s*\[(?:catalog\.models|model)\.(?:capabilities|cost|transportOverrides|temperatureRange)\]\s*$/m);
+    expect(modelDocs).not.toContain('cost.currency');
   });
 
   it('keeps README lightweight and links to detailed provider catalog docs', () => {
@@ -122,17 +126,25 @@ describe('provider catalog', () => {
     expect(readme).toContain('[Model catalog entries](docs/provider-catalog/models.md)');
     expect(readme).toContain('[Examples](docs/provider-catalog/examples.md)');
     expect(readme).toContain('credentialEnvVars = ["MY_GATEWAY_API_KEY"]');
+    expect(readme).toContain('costCurrency = "USD"');
     expect(readme.match(/MY_GATEWAY_API_KEY/g)?.length).toBe(1);
+    expect(readme.match(/\[\[catalog\.models\]\]/g)?.length).toBe(2);
+    expect(readme).not.toContain('cost.currency');
   });
 
   it('documents provider schema guardrails outside the README', () => {
     const providerDocs = readFileSync(join(import.meta.dir, '..', 'docs', 'provider-catalog', 'providers.md'), 'utf-8');
 
-    expect(providerDocs).toContain('Declare credential env vars once with top-level `credentialEnvVars`');
-    expect(providerDocs).toContain('Keep `transportConfig`, `transportConfig.authHeader`, and');
-    expect(providerDocs).toContain('Keep `catalog` and `catalog.discovery` in one `[catalog]` block');
-    expect(providerDocs).toContain('Keep `preset` and `preset.badge` in one `[preset]` block');
-    expect(providerDocs).toContain('| Field | Required | Accepted values or behavior |');
+    expect(providerDocs).toContain('A top-level provider is the company or service that self-publishes a model');
+    expect(providerDocs).toContain('| What you\'re adding | Files to touch | Brand/provider examples |');
+    expect(providerDocs).toContain('OpenAI + GPT/o-series');
+    expect(providerDocs).toContain('Anthropic + Claude/Opus');
+    expect(providerDocs).toContain('Keep credential env vars at the provider top level');
+    expect(providerDocs).toContain('costCurrency');
+    expect(providerDocs).toContain('Keep these nested objects inside one TOML block with dotted keys');
+    expect(providerDocs).toContain('authHeader.name = "authorization"');
+    expect(providerDocs).toContain('discovery.kind = "openai-compatible"');
+    expect(providerDocs).toContain('badge.text = "HOSTED"');
   });
 
   it('keeps credential env vars declared once in provider definition TOML', () => {
@@ -142,6 +154,22 @@ describe('provider catalog', () => {
         .toBeLessThanOrEqual(1);
       expect(content, `${file} should not duplicate credential env vars in presets`)
         .not.toMatch(/^apiKeyEnvVars\s*=/m);
+    }
+  });
+
+  it('keeps global model TOML free of provider pricing metadata', () => {
+    for (const file of catalogTomlFiles().filter((path) => path.includes(`${join('catalog', 'models')}`))) {
+      const content = readFileSync(file, 'utf-8');
+      expect(content, `${file} should not define provider route pricing on global models`)
+        .not.toMatch(/^(?:cost\.|costCurrency\s*=)/m);
+    }
+  });
+
+  it('keeps currency at provider level instead of model cost level', () => {
+    for (const file of catalogDocumentationAndTomlFiles()) {
+      const content = readFileSync(file, 'utf-8');
+      expect(content, `${file} should use provider-level costCurrency instead of model cost.currency`)
+        .not.toContain('cost.currency');
     }
   });
 
@@ -188,6 +216,25 @@ describe('provider catalog', () => {
     expect(opengateway?.setup?.credentialEnvVars).toEqual(opengateway?.credentialEnvVars);
     expect(opengateway?.validation?.credentialEnvVars).toEqual(opengateway?.credentialEnvVars);
     expect(opengateway?.preset?.apiKeyEnvVars).toEqual(opengateway?.credentialEnvVars);
+  });
+
+  it('keeps first-party pricing on provider catalog routes, not global models', () => {
+    const openai = getProviderDefinition('openai');
+    expect(openai?.costCurrency).toBe('USD');
+
+    const models = getModelsForProvider(openai!);
+    const gpt4o = models.find((model) => model.apiName === 'gpt-4o');
+    const gpt4oMini = models.find((model) => model.apiName === 'gpt-4o-mini');
+
+    expect(gpt4o?.cost).toEqual({
+      inputPerMillion: 2.50,
+      outputPerMillion: 10.00,
+    });
+    expect(gpt4oMini?.cost).toEqual({
+      inputPerMillion: 0.15,
+      outputPerMillion: 0.60,
+    });
+    expect(getGlobalModelDefinition('gpt-4o')).not.toHaveProperty('cost');
   });
 
   it('auto-discovers localhost provider definitions', () => {
