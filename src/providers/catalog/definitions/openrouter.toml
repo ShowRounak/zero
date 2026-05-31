@@ -8,11 +8,11 @@ category = "aggregating"
 baseURL = "https://openrouter.ai/api/v1"
 defaultModel = "openai/gpt-4o"
 apiKeyRequired = true
+credentialEnvVars = ["OPENROUTER_API_KEY"]
 
 [setup]
 requiresAuth = true
 authMode = "api-key"
-credentialEnvVars = ["OPENROUTER_API_KEY"]
 
 [transportConfig]
 kind = "openai-compatible"
@@ -57,6 +57,5 @@ cost.outputPerMillion = 0.28
 [preset]
 id = "openrouter"
 description = "OpenRouter multi-provider gateway"
-apiKeyEnvVars = ["OPENROUTER_API_KEY"]
 fallbackBaseUrl = "https://openrouter.ai/api/v1"
 fallbackModel = "openai/gpt-4o"

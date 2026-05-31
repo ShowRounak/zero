@@ -102,7 +102,7 @@ export interface UsageMetadata {
 
 export interface ValidationMetadata {
   kind: 'credential-env';
-  credentialEnvVars: string[];
+  credentialEnvVars?: string[];
   missingCredentialMessage?: string;
   matchBaseUrlHosts?: string[];
 }

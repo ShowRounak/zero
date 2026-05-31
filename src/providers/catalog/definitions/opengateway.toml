@@ -11,16 +11,15 @@ supportsModelRouting = true
 apiKeyLabel = "OpenGateway API key"
 apiKeyPlaceholder = "ogw_live_..."
 apiKeyRequired = true
+credentialEnvVars = ["OPENGATEWAY_API_KEY", "OPENAI_API_KEY"]
 
 [setup]
 requiresAuth = true
 authMode = "api-key"
-credentialEnvVars = ["OPENGATEWAY_API_KEY", "OPENAI_API_KEY"]
 
 [validation]
 kind = "credential-env"
-credentialEnvVars = ["OPENGATEWAY_API_KEY", "OPENAI_API_KEY"]
-missingCredentialMessage = "OPENGATEWAY_API_KEY is required to use OpenGateway."
+missingCredentialMessage = "An OpenGateway API key is required."
 matchBaseUrlHosts = ["opengateway.gitlawb.com", "opengateway.fly.dev"]
 
 [transportConfig]
@@ -58,7 +57,6 @@ supported = false
 [preset]
 id = "opengateway"
 description = "OpenGateway hosted models"
-apiKeyEnvVars = ["OPENGATEWAY_API_KEY"]
 fallbackBaseUrl = "https://opengateway.gitlawb.com/v1"
 fallbackModel = "mimo-v2.5-pro"
 badge.text = "FREE"

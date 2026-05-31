@@ -53,9 +53,26 @@ function catalogTomlFiles(): string[] {
   ];
 }
 
+function catalogDefinitionTomlFiles(): string[] {
+  const definitionsDir = join(import.meta.dir, '..', 'src', 'providers', 'catalog', 'definitions');
+
+  return readdirSync(definitionsDir)
+    .filter((file) => file.endsWith('.toml'))
+    .map((file) => join(definitionsDir, file));
+}
+
+function providerCatalogDocFiles(): string[] {
+  const docsDir = join(import.meta.dir, '..', 'docs', 'provider-catalog');
+
+  return readdirSync(docsDir)
+    .filter((file) => file.endsWith('.md'))
+    .map((file) => join(docsDir, file));
+}
+
 function catalogDocumentationAndTomlFiles(): string[] {
   return [
     join(import.meta.dir, '..', 'README.md'),
+    ...providerCatalogDocFiles(),
     ...catalogTomlFiles(),
   ];
 }
@@ -82,23 +99,50 @@ describe('provider catalog', () => {
   });
 
   it('documents the provider catalog model schema without nested model sub-tables', () => {
+    const modelDocs = readFileSync(join(import.meta.dir, '..', 'docs', 'provider-catalog', 'models.md'), 'utf-8');
+
+    expect(modelDocs).toContain('entry must stay as one TOML block');
+    expect(modelDocs).toContain('contextWindow');
+    expect(modelDocs).toContain('maxOutputTokens');
+    expect(modelDocs).toContain('temperatureRange.min');
+    expect(modelDocs).toContain('temperatureRange.max');
+    expect(modelDocs).toContain('cost.inputPerMillion');
+    expect(modelDocs).toContain('cost.outputPerMillion');
+    expect(modelDocs).toContain('cost.cachePerMillion');
+    expect(modelDocs).toContain('capabilities.supportsVision');
+    expect(modelDocs).toContain('transportOverrides.maxTokensField');
+    expect(modelDocs).toContain('| Field | Required | Accepted values or behavior |');
+    expect(modelDocs).not.toMatch(/^\s*\[(?:catalog\.models|model)\.(?:capabilities|cost|transportOverrides|temperatureRange)\]\s*$/m);
+  });
+
+  it('keeps README lightweight and links to detailed provider catalog docs', () => {
     const readme = readFileSync(join(import.meta.dir, '..', 'README.md'), 'utf-8');
 
-    expect(readme).toContain('entry must stay as one model block');
-    expect(readme).toContain('contextWindow');
-    expect(readme).toContain('maxOutputTokens');
-    expect(readme).toContain('temperatureRange.min');
-    expect(readme).toContain('temperatureRange.max');
-    expect(readme).toContain('cost.inputPerMillion');
-    expect(readme).toContain('cost.outputPerMillion');
-    expect(readme).toContain('cost.cachePerMillion');
-    expect(readme).toContain('capabilities.supportsVision');
-    expect(readme).toContain('transportOverrides.maxTokensField');
-    expect(readme).toContain('| Field | Required | Accepted values or behavior |');
-    expect(readme).toContain('Keep `transportConfig`, `transportConfig.authHeader`, and');
-    expect(readme).toContain('Keep `catalog` and `catalog.discovery` in one `[catalog]` block');
-    expect(readme).toContain('Keep `preset` and `preset.badge` in one `[preset]` block');
-    expect(readme).not.toMatch(/^\s*\[(?:catalog\.models|model)\.(?:capabilities|cost|transportOverrides|temperatureRange)\]\s*$/m);
+    expect(readme).toContain('[Provider definitions](docs/provider-catalog/providers.md)');
+    expect(readme).toContain('[Model catalog entries](docs/provider-catalog/models.md)');
+    expect(readme).toContain('[Examples](docs/provider-catalog/examples.md)');
+    expect(readme).toContain('credentialEnvVars = ["MY_GATEWAY_API_KEY"]');
+    expect(readme.match(/MY_GATEWAY_API_KEY/g)?.length).toBe(1);
+  });
+
+  it('documents provider schema guardrails outside the README', () => {
+    const providerDocs = readFileSync(join(import.meta.dir, '..', 'docs', 'provider-catalog', 'providers.md'), 'utf-8');
+
+    expect(providerDocs).toContain('Declare credential env vars once with top-level `credentialEnvVars`');
+    expect(providerDocs).toContain('Keep `transportConfig`, `transportConfig.authHeader`, and');
+    expect(providerDocs).toContain('Keep `catalog` and `catalog.discovery` in one `[catalog]` block');
+    expect(providerDocs).toContain('Keep `preset` and `preset.badge` in one `[preset]` block');
+    expect(providerDocs).toContain('| Field | Required | Accepted values or behavior |');
+  });
+
+  it('keeps credential env vars declared once in provider definition TOML', () => {
+    for (const file of catalogDefinitionTomlFiles()) {
+      const content = readFileSync(file, 'utf-8');
+      expect(content.match(/^credentialEnvVars\s*=/gm)?.length ?? 0, `${file} should declare credentialEnvVars at most once`)
+        .toBeLessThanOrEqual(1);
+      expect(content, `${file} should not duplicate credential env vars in presets`)
+        .not.toMatch(/^apiKeyEnvVars\s*=/m);
+    }
   });
 
   it('auto-discovers provider and gateway definitions', () => {
@@ -135,6 +179,15 @@ describe('provider catalog', () => {
     });
     expect(openrouter?.catalog?.discovery?.kind).toBe('openai-compatible');
     expect(openrouter?.catalog?.discovery?.path).toBe('/models');
+  });
+
+  it('fans out top-level credential env vars into normalized provider metadata', () => {
+    const opengateway = getProviderDefinition('opengateway');
+
+    expect(opengateway?.credentialEnvVars).toEqual(['OPENGATEWAY_API_KEY', 'OPENAI_API_KEY']);
+    expect(opengateway?.setup?.credentialEnvVars).toEqual(opengateway?.credentialEnvVars);
+    expect(opengateway?.validation?.credentialEnvVars).toEqual(opengateway?.credentialEnvVars);
+    expect(opengateway?.preset?.apiKeyEnvVars).toEqual(opengateway?.credentialEnvVars);
   });
 
   it('auto-discovers localhost provider definitions', () => {

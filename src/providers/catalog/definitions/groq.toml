@@ -8,11 +8,11 @@ category = "hosted"
 baseURL = "https://api.groq.com/openai/v1"
 defaultModel = "llama-3.3-70b-versatile"
 apiKeyRequired = true
+credentialEnvVars = ["GROQ_API_KEY"]
 
 [setup]
 requiresAuth = true
 authMode = "api-key"
-credentialEnvVars = ["GROQ_API_KEY"]
 
 [transportConfig]
 kind = "openai-compatible"
@@ -64,6 +64,5 @@ cost.outputPerMillion = 0.99
 [preset]
 id = "groq"
 description = "Groq fast inference"
-apiKeyEnvVars = ["GROQ_API_KEY"]
 fallbackBaseUrl = "https://api.groq.com/openai/v1"
 fallbackModel = "llama-3.3-70b-versatile"

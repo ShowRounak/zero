@@ -154,11 +154,33 @@ function normalizeDefinition(
   definition: ProviderDefinition,
   definitionById: Map<string, ProviderDefinition>
 ): ProviderDefinition {
-  const setup = definition.setup ?? {
-    requiresAuth: definition.apiKeyRequired !== false,
-    authMode: definition.apiKeyRequired === false ? 'none' : 'api-key',
-    credentialEnvVars: definition.credentialEnvVars,
-  } as const;
+  const credentialEnvVars =
+    definition.credentialEnvVars ??
+    definition.setup?.credentialEnvVars ??
+    definition.validation?.credentialEnvVars ??
+    definition.preset?.apiKeyEnvVars;
+
+  const setup = {
+    ...(definition.setup ?? {
+      requiresAuth: definition.apiKeyRequired !== false,
+      authMode: definition.apiKeyRequired === false ? 'none' : 'api-key',
+    } as const),
+    credentialEnvVars: definition.setup?.credentialEnvVars ?? credentialEnvVars,
+  };
+
+  const validation = definition.validation
+    ? {
+        ...definition.validation,
+        credentialEnvVars: definition.validation.credentialEnvVars ?? credentialEnvVars,
+      }
+    : undefined;
+
+  const preset = definition.preset
+    ? {
+        ...definition.preset,
+        apiKeyEnvVars: definition.preset.apiKeyEnvVars ?? credentialEnvVars,
+      }
+    : undefined;
 
   const catalog = definition.catalog ?? {
     source: definition.models ? 'static' : 'dynamic',
@@ -177,12 +199,14 @@ function normalizeDefinition(
   return {
     ...definition,
     setup,
+    validation,
+    preset,
     transportConfig: transportConfig ?? {
       kind: 'openai-compatible',
     },
     catalog,
     apiKeyRequired: definition.apiKeyRequired ?? setup.requiresAuth,
-    credentialEnvVars: definition.credentialEnvVars ?? setup.credentialEnvVars,
+    credentialEnvVars,
     models: definition.models ?? catalog.models,
   };
 }
