@@ -93,10 +93,15 @@ export class OpenAIProvider implements Provider {
     try {
       stream = await this.client.chat.completions.create(createStreamRequest(true));
     } catch (error) {
-      if (!isUnsupportedStreamOptionsError(error)) {
-        throw error;
+      if (isUnsupportedStreamOptionsError(error)) {
+        try {
+          stream = await this.client.chat.completions.create(createStreamRequest(false));
+        } catch (retryError) {
+          throw formatProviderCreateError(retryError);
+        }
+      } else {
+        throw formatProviderCreateError(error);
       }
-      stream = await this.client.chat.completions.create(createStreamRequest(false));
     }
 
     const toolCallAccumulators = new Map<number, { 
@@ -106,78 +111,133 @@ export class OpenAIProvider implements Provider {
       started: boolean;
     }>();
 
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta;
-      const finishReason = chunk.choices[0]?.finish_reason;
+    try {
+      for await (const chunk of stream) {
+        if ((chunk as any).error) {
+          const errorData = (chunk as any).error;
+          const message = errorData.message || JSON.stringify(errorData);
+          throw new Error(`Provider returned error: ${message}`);
+        }
 
-      if (delta?.content) {
-        yield { type: 'text', content: delta.content };
-      }
+        const delta = chunk.choices[0]?.delta;
+        const finishReason = chunk.choices[0]?.finish_reason;
 
-      if (delta?.tool_calls) {
-        for (const tc of delta.tool_calls) {
-          if (tc.index === undefined) continue;
+        if (delta?.content) {
+          yield { type: 'text', content: delta.content };
+        }
 
-          let acc = toolCallAccumulators.get(tc.index);
-          if (!acc) {
-            acc = { id: '', name: '', arguments: '', started: false };
-            toolCallAccumulators.set(tc.index, acc);
+        if (delta?.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            if (tc.index === undefined) continue;
+
+            let acc = toolCallAccumulators.get(tc.index);
+            if (!acc) {
+              acc = { id: '', name: '', arguments: '', started: false };
+              toolCallAccumulators.set(tc.index, acc);
+            }
+
+            // If we already had data at this index and now get a new id,
+            // the previous tool call is complete.
+            if (tc.id && acc.id && acc.id !== tc.id) {
+              if (acc.id) {
+                yield { type: 'tool-call-end', id: acc.id };
+              }
+              acc = { id: '', name: '', arguments: '', started: false };
+              toolCallAccumulators.set(tc.index, acc);
+            }
+
+            if (tc.id) acc.id = tc.id;
+            if (tc.function?.name) acc.name = tc.function.name;
+            if (tc.function?.arguments) {
+              acc.arguments += tc.function.arguments;
+              yield {
+                type: 'tool-call-delta',
+                id: acc.id || `pending-${tc.index}`,
+                argumentsFragment: tc.function.arguments,
+              };
+            }
+
+            // Emit start event the first time we have both id and name
+            if (acc.id && acc.name && !acc.started) {
+              yield { type: 'tool-call-start', id: acc.id, name: acc.name };
+              acc.started = true;
+            }
           }
+        }
 
-          // If we already had data at this index and now get a new id, 
-          // the previous tool call is complete.
-          if (tc.id && acc.id && acc.id !== tc.id) {
+        if (chunk.usage) {
+          yield {
+            type: 'usage',
+            promptTokens: chunk.usage.prompt_tokens,
+            completionTokens: chunk.usage.completion_tokens,
+          };
+        }
+
+        // If the model signaled it's done with tool calls, close any open ones
+        if (finishReason === 'tool_calls') {
+          for (const [_, acc] of toolCallAccumulators) {
             if (acc.id) {
               yield { type: 'tool-call-end', id: acc.id };
             }
-            acc = { id: '', name: '', arguments: '', started: false };
-            toolCallAccumulators.set(tc.index, acc);
-          }
-
-          if (tc.id) acc.id = tc.id;
-          if (tc.function?.name) acc.name = tc.function.name;
-          if (tc.function?.arguments) {
-            acc.arguments += tc.function.arguments;
-            yield {
-              type: 'tool-call-delta',
-              id: acc.id || `pending-${tc.index}`,
-              argumentsFragment: tc.function.arguments,
-            };
-          }
-
-          // Emit start event the first time we have both id and name
-          if (acc.id && acc.name && !acc.started) {
-            yield { type: 'tool-call-start', id: acc.id, name: acc.name };
-            acc.started = true;
           }
         }
       }
 
-      if (chunk.usage) {
-        yield {
-          type: 'usage',
-          promptTokens: chunk.usage.prompt_tokens,
-          completionTokens: chunk.usage.completion_tokens,
-        };
-      }
-
-      // If the model signaled it's done with tool calls, close any open ones
-      if (finishReason === 'tool_calls') {
-        for (const [_, acc] of toolCallAccumulators) {
-          if (acc.id) {
-            yield { type: 'tool-call-end', id: acc.id };
-          }
+      // End of stream - close any remaining open tool calls
+      for (const [_, acc] of toolCallAccumulators) {
+        if (acc.id) {
+          yield { type: 'tool-call-end', id: acc.id };
         }
       }
-    }
 
-    // End of stream - close any remaining open tool calls
-    for (const [_, acc] of toolCallAccumulators) {
-      if (acc.id) {
-        yield { type: 'tool-call-end', id: acc.id };
-      }
+      yield { type: 'done' };
+    } catch (error) {
+      const message = getDetailedErrorMessage(error);
+      throw new Error(`Provider returned error during streaming: ${message}`);
     }
-
-    yield { type: 'done' };
   }
+}
+
+function formatProviderCreateError(error: unknown): Error {
+  const message = getDetailedErrorMessage(error);
+  const lower = message.toLowerCase();
+
+  if (message.includes('401') || lower.includes('invalid') || lower.includes('unauthorized')) {
+    return new Error(`Provider authentication error (check your API key): ${message}`);
+  }
+
+  if (lower.includes('rate') || lower.includes('quota')) {
+    return new Error(`Provider rate limit error: ${message}`);
+  }
+
+  return new Error(`Provider returned error: ${message}`);
+}
+
+function getDetailedErrorMessage(error: any): string {
+  if (!error) return 'Unknown error';
+
+  if (error.message && !error.message.includes('Provider returned error')) {
+    return error.message;
+  }
+
+  if (error.error) {
+    if (typeof error.error === 'string') return error.error;
+    if (error.error.message) return error.error.message;
+    try {
+      return JSON.stringify(error.error);
+    } catch {}
+  }
+
+  if (error.response?.data) {
+    const data = error.response.data;
+    if (data.error?.message) return data.error.message;
+    if (typeof data.error === 'string') return data.error;
+    try {
+      return JSON.stringify(data);
+    } catch {}
+  }
+
+  if (error.cause?.message) return error.cause.message;
+
+  return error.message || String(error);
 }

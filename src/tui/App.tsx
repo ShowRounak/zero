@@ -35,6 +35,29 @@ type SlashCommand = {
   run: () => void;
 };
 
+function toFriendlyError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const lower = raw.toLowerCase();
+
+  if (lower.includes('no llm provider configured') || lower.includes('no provider')) {
+    return 'No provider set up. Type /provider to add one.';
+  }
+
+  if (lower.includes('auth') || lower.includes('unauthorized') || lower.includes('invalid') || lower.includes('401') || lower.includes('api key')) {
+    return `Authentication failed - check your API key. Type /provider to update it.\n(${raw})`;
+  }
+
+  if (lower.includes('rate') || lower.includes('quota')) {
+    return `Provider rate limit or quota reached. Try again shortly.\n(${raw})`;
+  }
+
+  if (lower.includes('enotfound') || lower.includes('econnrefused') || lower.includes('etimedout') || lower.includes('fetch failed') || lower.includes('network')) {
+    return `Network error reaching the provider. Check your connection and base URL.\n(${raw})`;
+  }
+
+  return `Error: ${raw}`;
+}
+
 const colors = {
   bg: '#080b0d',
   surface: '#101417',
@@ -90,6 +113,9 @@ function commandHelp() {
     { type: 'system' as const, content: '  /provider  Manage local provider profiles' },
     { type: 'system' as const, content: '  /plan      Toggle plan mode styling' },
     { type: 'system' as const, content: '  /todo      Show or hide the todo rail' },
+    { type: 'system' as const, content: '  /tools     Toggle tool calling' },
+    { type: 'system' as const, content: '  /debug     Show the last provider error' },
+    { type: 'system' as const, content: '  /debug-mode Toggle provider payload logging' },
     { type: 'system' as const, content: '  /help      Show this help' },
     { type: 'system' as const, content: '  /exit      Quit' },
   ];
@@ -105,6 +131,9 @@ export function App(props: { onExit: () => void }) {
   const [input, setInput] = createSignal('');
   const [isThinking, setIsThinking] = createSignal(false);
   const [isPlanMode, setIsPlanMode] = createSignal(false);
+  const [debugMode, setDebugMode] = createSignal(false);
+  const [lastError, setLastError] = createSignal<unknown>(null);
+  const [toolsEnabled, setToolsEnabled] = createSignal(true);
   const [scrollOffset, setScrollOffset] = createSignal(0);
   const [usage, setUsage] = createSignal<Usage>({ promptTokens: 0, completionTokens: 0 });
   const [plan, setPlan] = createSignal<PlanItem[]>([]);
@@ -163,6 +192,30 @@ export function App(props: { onExit: () => void }) {
       name: '/todo',
       detail: 'Show or hide the todo rail',
       run: () => toggleTodoRail(),
+    },
+    {
+      name: '/tools',
+      detail: 'Toggle model tool calling',
+      run: () => {
+        setToolsEnabled((value) => !value);
+        append({ type: 'system', content: `Tools ${toolsEnabled() ? 'enabled' : 'disabled'}.` });
+      },
+    },
+    {
+      name: '/debug',
+      detail: 'Show the last provider error',
+      run: () => {
+        const error = lastError();
+        append({ type: 'system', content: error ? toFriendlyError(error) : 'No provider error recorded yet.' });
+      },
+    },
+    {
+      name: '/debug-mode',
+      detail: 'Toggle provider payload logging',
+      run: () => {
+        setDebugMode((value) => !value);
+        append({ type: 'system', content: `Debug mode ${debugMode() ? 'enabled' : 'disabled'}.` });
+      },
     },
     {
       name: '/help',
@@ -275,6 +328,9 @@ export function App(props: { onExit: () => void }) {
       });
 
       await runAgent(prompt, provider, {
+        debug: debugMode(),
+        toolsEnabled: toolsEnabled(),
+        planMode: isPlanMode(),
         onText: (text) => {
           setIsThinking(false);
           updateLastAssistant(text);
@@ -294,27 +350,17 @@ export function App(props: { onExit: () => void }) {
         onPlanUpdate: (nextPlan) => updatePlan(nextPlan),
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      append({ type: 'system', content: `Error: ${friendlyError(message)}` });
+      setLastError(err);
+      append({ type: 'system', content: toFriendlyError(err) });
     } finally {
       setIsThinking(false);
       stopAssistantStreaming();
     }
   }
 
-  function friendlyError(message: string) {
-    const lower = message.toLowerCase();
-    if (message.includes('401') || lower.includes('unauthorized') || lower.includes('invalid api key')) {
-      return 'Provider error: invalid or missing API key. Use /provider to fix credentials.';
-    }
-    if (message.includes('No LLM provider configured')) return 'No provider set up. Type /provider to add one.';
-    if (lower.includes('connection') || lower.includes('network')) return `Provider connection error: ${message}`;
-    return message;
-  }
-
   function handleSlash(command: string) {
     const cmd = command.toLowerCase();
-    const matched = slashCommands().find((item) => item.name === cmd || (cmd === '/quit' && item.name === '/exit'));
+    const matched = slashCommands().find((item) => item.name === cmd || (cmd === '/quit' && item.name === '/exit') || (cmd === '/debug-mode false' && item.name === '/debug-mode'));
     if (matched) {
       matched.run();
       return;
@@ -545,6 +591,10 @@ export function App(props: { onExit: () => void }) {
         </Show>
       </box>
 
+      <Show when={debugMode() && lastError()}>
+        <DebugError error={lastError()} />
+      </Show>
+
       <Show when={commandMenuOpen()}>
         <CommandMenu commands={filteredCommands()} cursor={commandCursor()} />
       </Show>
@@ -557,6 +607,8 @@ export function App(props: { onExit: () => void }) {
         model={modelName()}
         todoVisible={rightRail()}
         hasTodos={hasPlanItems()}
+        debugMode={debugMode()}
+        toolsEnabled={toolsEnabled()}
       />
     </box>
   );
@@ -714,6 +766,19 @@ function CommandMenu(props: { commands: SlashCommand[]; cursor: number }) {
   );
 }
 
+function DebugError(props: { error: unknown }) {
+  const message = () => props.error instanceof Error ? props.error.message : String(props.error);
+
+  return (
+    <box width="100%" flexDirection="column" paddingLeft={1} paddingRight={1} flexShrink={0}>
+      <box width="100%" flexDirection="column" backgroundColor={colors.surface} paddingLeft={1} paddingRight={1}>
+        <text fg={colors.error} attributes={TextAttributes.BOLD}>debug error</text>
+        <text fg={colors.muted} wrapMode="word">{trimLine(message(), 240)}</text>
+      </box>
+    </box>
+  );
+}
+
 function ProviderView(props: {
   providers: Pick<ProviderProfile, 'name'>[];
   cursor: number;
@@ -788,6 +853,8 @@ function Composer(props: {
   model: string;
   todoVisible: boolean;
   hasTodos: boolean;
+  debugMode: boolean;
+  toolsEnabled: boolean;
 }) {
   const inChat = () => props.screen === 'chat';
   return (
@@ -819,6 +886,12 @@ function Composer(props: {
         <text fg={colors.subtle}>/ commands - ctrl+t todo - arrows scroll - ctrl+c exit</text>
         <Show when={props.planMode}>
           <text fg={colors.accent}> - plan mode</text>
+        </Show>
+        <Show when={!props.toolsEnabled}>
+          <text fg={colors.yellow}> - tools off</text>
+        </Show>
+        <Show when={props.debugMode}>
+          <text fg={colors.error}> - debug</text>
         </Show>
         <Show when={props.hasTodos}>
           <text fg={props.todoVisible ? colors.accent : colors.subtle}>

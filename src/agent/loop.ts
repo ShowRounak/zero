@@ -1,9 +1,9 @@
 import type { Provider } from '../providers/types';
 import type { ToolCall, ToolResult } from '../tools/types';
 import { toolRegistry } from '../tools';
-import { DEFAULT_SYSTEM_PROMPT } from './prompts';
-import { clearPlan } from '../tools/plan';
-import { getCurrentPlan, type PlanItem } from '../tools/plan';
+import { DEFAULT_SYSTEM_PROMPT, PLAN_MODE_SYSTEM_PROMPT } from './prompts';
+import { clearPlan, getCurrentPlan, type PlanItem } from '../tools/plan';
+import { z } from 'zod';
 
 export interface AgentOptions {
   maxTurns?: number;
@@ -12,6 +12,9 @@ export interface AgentOptions {
   onToolResult?: (result: ToolResult) => void;
   onUsage?: (usage: { promptTokens: number; completionTokens: number }) => void;
   onPlanUpdate?: (plan: PlanItem[]) => void;
+  toolsEnabled?: boolean;
+  debug?: boolean;
+  planMode?: boolean;
 }
 
 interface PendingToolCall {
@@ -25,14 +28,26 @@ export async function runAgent(
   provider: Provider,
   options: AgentOptions = {}
 ): Promise<string> {
-  const { maxTurns = 12, onText, onToolCall, onToolResult, onUsage, onPlanUpdate } = options;
+  const {
+    maxTurns = 12,
+    onText,
+    onToolCall,
+    onToolResult,
+    onUsage,
+    onPlanUpdate,
+    toolsEnabled = true,
+    debug = false,
+    planMode = false,
+  } = options;
 
   // Clear any previous plan when starting a new task
   clearPlan();
   onPlanUpdate?.(getCurrentPlan());
 
+  const systemPrompt = planMode ? PLAN_MODE_SYSTEM_PROMPT : DEFAULT_SYSTEM_PROMPT;
+
   const messages: any[] = [
-    { role: 'system', content: DEFAULT_SYSTEM_PROMPT },
+    { role: 'system', content: systemPrompt },
     { role: 'user', content: initialPrompt },
   ];
 
@@ -40,14 +55,45 @@ export async function runAgent(
   let finalAnswer = '';
 
   for (let turn = 0; turn < maxTurns; turn++) {
-    const toolDefinitions = tools.map(t => ({
-      name: t.name,
-      description: t.description,
-      parameters: t.parameters.shape,
-    }));
+    const toolDefinitions = (toolsEnabled && tools.length > 0)
+      ? tools.map(t => {
+          const jsonSchema = z.toJSONSchema(t.parameters, { target: 'draft-7' }) as any;
+          delete jsonSchema.$schema;
+
+          if (jsonSchema.type === 'object' && !('additionalProperties' in jsonSchema)) {
+            jsonSchema.additionalProperties = false;
+          }
+
+          return {
+            name: t.name,
+            description: t.description,
+            parameters: jsonSchema,
+          };
+        })
+      : [];
 
     let currentText = '';
     const toolCallMap = new Map<string, PendingToolCall>();
+
+    if (debug) {
+      const red = '\x1b[31m';
+      const reset = '\x1b[0m';
+      const border = '-'.repeat(50);
+      const toolsList = toolDefinitions.map(t => t.name).join(', ');
+      const preview = String(messages[messages.length - 1]?.content || '').slice(0, 45);
+
+      console.log(`\n${red}+${border}+`);
+      console.log(`|  SENDING TO PROVIDER${' '.repeat(31)}|`);
+      console.log(`+${border}+`);
+      console.log(`| Messages: ${messages.length}${' '.repeat(Math.max(0, 40 - String(messages.length).length))}|`);
+      console.log(`| Tools enabled: ${toolDefinitions.length > 0}${' '.repeat(33)}|`);
+      console.log(`| Tool count: ${toolDefinitions.length}${' '.repeat(Math.max(0, 38 - String(toolDefinitions.length).length))}|`);
+      if (toolsList) {
+        console.log(`| Tools: ${toolsList.slice(0, 42)}${' '.repeat(Math.max(0, 43 - toolsList.length))}|`);
+      }
+      console.log(`| Last message: ${preview}${' '.repeat(Math.max(0, 36 - preview.length))}|`);
+      console.log(`+${border}+${reset}\n`);
+    }
 
     // Stream the response
     for await (const event of provider.streamCompletion(messages, toolDefinitions)) {
