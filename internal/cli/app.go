@@ -16,6 +16,7 @@ import (
 	"github.com/Gitlawb/zero/internal/sandbox"
 	"github.com/Gitlawb/zero/internal/selfverify"
 	"github.com/Gitlawb/zero/internal/sessions"
+	"github.com/Gitlawb/zero/internal/skills"
 	"github.com/Gitlawb/zero/internal/tools"
 	"github.com/Gitlawb/zero/internal/tui"
 	"github.com/Gitlawb/zero/internal/update"
@@ -36,6 +37,7 @@ type appDeps struct {
 	newSessionStore      func() *sessions.Store
 	loadPlugins          func(plugins.LoadOptions) (plugins.LoadResult, error)
 	loadHooks            func(hooks.LoadOptions) (hooks.LoadResult, error)
+	skillsDir            func() string
 	newMCPStore          func() (*mcp.PermissionStore, error)
 	newSandboxStore      func() (*sandbox.GrantStore, error)
 	selectSandboxBackend func(sandbox.BackendOptions) sandbox.Backend
@@ -94,6 +96,9 @@ func defaultAppDeps() appDeps {
 		},
 		loadPlugins: plugins.Load,
 		loadHooks:   hooks.LoadConfig,
+		skillsDir: func() string {
+			return skills.DefaultDir(nil)
+		},
 		newMCPStore: func() (*mcp.PermissionStore, error) {
 			return mcp.NewPermissionStore(mcp.StoreOptions{})
 		},
@@ -160,6 +165,8 @@ func runWithDeps(args []string, stdout io.Writer, stderr io.Writer, deps appDeps
 		return runSessions(args[1:], stdout, stderr, deps)
 	case "plugins", "plugin":
 		return runPlugins(args[1:], stdout, stderr, deps)
+	case "skills", "skill":
+		return runSkills(args[1:], stdout, stderr, deps)
 	case "hooks":
 		return runHooks(args[1:], stdout, stderr, deps)
 	case "mcp":
@@ -214,6 +221,9 @@ func fillAppDeps(deps appDeps) appDeps {
 	}
 	if deps.loadHooks == nil {
 		deps.loadHooks = defaults.loadHooks
+	}
+	if deps.skillsDir == nil {
+		deps.skillsDir = defaults.skillsDir
 	}
 	if deps.newMCPStore == nil {
 		deps.newMCPStore = defaults.newMCPStore
@@ -368,6 +378,7 @@ Commands:
   find       Alias for search
   sessions   Inspect local Zero session lineage
   plugins    Inspect local Zero plugin manifests
+  skills     Inspect local Zero skills
   hooks      Inspect Zero hook configuration
   mcp        Manage MCP backend settings
   sandbox    Inspect sandbox policy and persistent grants

@@ -218,6 +218,8 @@ func TestRunCommandsDoNotLaunchTUI(t *testing.T) {
 		{"session"},
 		{"plugins"},
 		{"plugin"},
+		{"skills"},
+		{"skill"},
 		{"hooks"},
 		{"mcp"},
 		{"sandbox"},

@@ -157,6 +157,9 @@ func CoreReadOnlyTools(workspaceRoot string) []Tool {
 		NewGlobTool(workspaceRoot),
 		NewGrepTool(workspaceRoot),
 		NewAskUserTool(),
+		// skill resolves its own skills directory (skills.DefaultDir); an empty
+		// dir keeps the read-only-tools set workspace-independent like ask_user.
+		NewSkillTool(""),
 	}
 }
 
