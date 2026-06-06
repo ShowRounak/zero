@@ -278,20 +278,28 @@ func (state *compactionState) recover(
 	if !isContextLimitError(errorMessage) {
 		return messages, false, nil
 	}
-	state.reactiveAttempted = true
 
 	result, compactErr := Compact(messages, CompactionOptions{
 		PreserveLast: state.preserveLast,
 		Summarize:    summarizeClosure(ctx, provider),
 	})
 	if compactErr != nil {
+		// A genuine compaction attempt was made (and failed): the budget is spent
+		// so the loop gives up rather than retrying a failing summarizer forever.
+		state.reactiveAttempted = true
 		return messages, true, compactErr
 	}
 	if estimateTokens(result) >= estimateTokens(messages) {
 		// Nothing to compact; the retry would just fail again. Signal "not
-		// retried" so the caller surfaces the original context-limit error.
+		// retried" so the caller surfaces the original context-limit error. Do NOT
+		// consume the one-shot budget here: a no-op recover (history too small to
+		// shrink) must not disable a later recovery once the history has grown.
 		return messages, false, nil
 	}
+	// Success: a real compaction shrank the history and we will retry. Consume the
+	// one-shot budget now so a provider that keeps returning context-limit errors
+	// after a successful compaction can't loop forever.
+	state.reactiveAttempted = true
 	state.lowWaterMark = estimateTokens(result)
 	return result, true, nil
 }

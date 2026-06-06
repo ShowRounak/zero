@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Gitlawb/zero/internal/redaction"
 	"github.com/Gitlawb/zero/internal/sandbox"
 	"github.com/Gitlawb/zero/internal/tools"
 	"github.com/Gitlawb/zero/internal/zeroruntime"
@@ -15,6 +16,13 @@ import (
 
 const defaultSystemPrompt = "You are Zero, a terminal coding agent. Help with the current workspace and use tools when needed."
 const maxTurnsAnswer = "Agent reached maximum number of turns without a final answer."
+
+// droppedToolCallNotice tells the model a tool call it attempted was malformed
+// (missing a tool name) and dropped before execution, so it re-issues a valid
+// call instead of assuming the call ran. It is surfaced both when a turn yields
+// ONLY a dropped call and when a turn mixes valid calls with a dropped one.
+const droppedToolCallNotice = "Your previous tool call was malformed (it was missing a tool name) and was not executed. " +
+	"Re-issue the tool call with a valid tool name and JSON arguments, or reply with your final answer."
 
 // maxTaskDepth caps sub-agent (task) recursion. The top-level run is Depth 0, so
 // with maxTaskDepth = 2 a parent (0) may spawn a child (1) which may spawn a
@@ -135,10 +143,13 @@ func Run(ctx context.Context, prompt string, provider Provider, options Options)
 					result.Messages = copyMessages(messages)
 					return result, retryStreamErr
 				}
-				collected = zeroruntime.CollectStreamWithOptions(ctx, retryStream, zeroruntime.CollectOptions{
-					OnText:  options.OnText,
-					OnUsage: options.OnUsage,
-				})
+				// Omit OnText/OnUsage on the reactive retry: when the original
+				// error surfaced MID-stream, partial text was already forwarded to
+				// the user. Re-streaming the retried response on top of it would
+				// duplicate output. Mirroring summarizeClosure, the recovery stays
+				// invisible — the retried text is still captured in collected.Text
+				// and becomes the turn's assistant message.
+				collected = zeroruntime.CollectStreamWithOptions(ctx, retryStream, zeroruntime.CollectOptions{})
 			}
 		}
 		if collected.Error != "" {
@@ -163,9 +174,8 @@ func Run(ctx context.Context, prompt string, provider Provider, options Options)
 			// turn is never counted as a runaway empty turn.
 			if collected.DroppedToolCalls > 0 {
 				messages = append(messages, zeroruntime.Message{
-					Role: zeroruntime.MessageRoleUser,
-					Content: "Your previous tool call was malformed (it was missing a tool name) and was not executed. " +
-						"Re-issue the tool call with a valid tool name and JSON arguments, or reply with your final answer.",
+					Role:    zeroruntime.MessageRoleUser,
+					Content: droppedToolCallNotice,
 				})
 				continue
 			}
@@ -223,6 +233,17 @@ func Run(ctx context.Context, prompt string, provider Provider, options Options)
 			if outcome.InjectHint && failureHint == "" {
 				failureHint = toolFailureHint(call.Name, toolSchemaJSON(registry, call.Name), toolResult.Output)
 			}
+		}
+
+		// A turn can mix valid tool calls with a dropped (nameless) one. The valid
+		// calls executed above; surface the dropped call too so it is never
+		// silently ignored just because the turn also did real work. This is
+		// independent of (and additive to) the failure-hint / plan-reminder nudges.
+		if collected.DroppedToolCalls > 0 {
+			messages = append(messages, zeroruntime.Message{
+				Role:    zeroruntime.MessageRoleUser,
+				Content: droppedToolCallNotice,
+			})
 		}
 
 		// A repeated-failure hint (schema + exact error) takes priority over the
@@ -372,6 +393,18 @@ func executeToolCall(ctx context.Context, registry *tools.Registry, call ToolCal
 	}
 }
 
+// scrubInterceptedOutput mirrors the registry's scrubResultSecrets boundary for
+// the loop-intercepted paths (ask_user answers, task child final answers) that
+// build a ToolResult.Output directly instead of going through
+// registry.RunWithOptions. RedactString substitutes "[REDACTED]" inline; the
+// returned bool reports whether anything was scrubbed so the caller can set
+// ToolResult.Redacted, keeping these paths consistent with every other tool
+// result the model and transcript see.
+func scrubInterceptedOutput(output string) (string, bool) {
+	scrubbed := redaction.RedactString(output, redaction.Options{})
+	return scrubbed, scrubbed != output
+}
+
 // executeTask spawns a synchronous sub-agent run for a task tool call. It is the
 // task-tool counterpart to executeAskUser: the loop intercepts the call because
 // a normal tool's Run() cannot reach the provider/registry needed to start a
@@ -390,10 +423,11 @@ func executeTask(ctx context.Context, registry *tools.Registry, call ToolCall, a
 		}
 	}
 
-	// No provider to spawn a child run: fall back to the tool's graceful Run().
-	if options.Provider == nil {
-		return taskFallbackResult(ctx, registry, call, args)
-	}
+	// No nil-provider fallback here: Run() rejects a nil provider and injects it
+	// into options before the loop runs, so options.Provider is always non-nil by
+	// the time executeTask is reached. (Unlike ask_user, which genuinely degrades
+	// when OnAskUser is nil, the task path has no headless degradation to fall
+	// back to.)
 
 	// Depth guard: refuse to spawn beyond the cap so a sub-agent can't recurse
 	// indefinitely. This is an error result (not a hard loop stop) so the parent
@@ -450,33 +484,17 @@ func executeTask(ctx context.Context, registry *tools.Registry, call ToolCall, a
 		}
 	}
 
+	// Scrub the child's final answer through the same redaction boundary the
+	// registry applies to tool output, so a secret a sub-agent surfaced never
+	// lands in the parent transcript unredacted.
+	output, redacted := scrubInterceptedOutput(childResult.FinalAnswer)
 	return ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
 		Status:     tools.StatusOK,
-		Output:     childResult.FinalAnswer,
+		Output:     output,
+		Redacted:   redacted,
 		Display:    tools.Display{Kind: "task", Summary: taskDisplaySummary(request, "")},
-	}
-}
-
-// taskFallbackResult runs the registered task tool (its graceful Run()) so the
-// no-provider path matches the headless path, mirroring askUserFallbackResult.
-func taskFallbackResult(ctx context.Context, registry *tools.Registry, call ToolCall, args map[string]any) ToolResult {
-	if _, ok := registry.Get(call.Name); ok {
-		result := registry.Run(ctx, call.Name, args)
-		return ToolResult{
-			ToolCallID: call.ID,
-			Name:       call.Name,
-			Status:     result.Status,
-			Output:     result.Output,
-			Redacted:   result.Redacted,
-		}
-	}
-	return ToolResult{
-		ToolCallID: call.ID,
-		Name:       call.Name,
-		Status:     tools.StatusOK,
-		Output:     tools.TaskNonInteractiveMessage(),
 	}
 }
 
@@ -523,11 +541,16 @@ func executeAskUser(ctx context.Context, registry *tools.Registry, call ToolCall
 		return askUserFallbackResult(ctx, registry, call, args)
 	}
 
+	// Scrub the formatted answers through the same redaction boundary the
+	// registry applies to tool output, so a secret in a user's answer never lands
+	// in the transcript unredacted.
+	output, redacted := scrubInterceptedOutput(tools.FormatAskUserAnswers(questions, response.Answers))
 	return ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
 		Status:     tools.StatusOK,
-		Output:     tools.FormatAskUserAnswers(questions, response.Answers),
+		Output:     output,
+		Redacted:   redacted,
 	}
 }
 

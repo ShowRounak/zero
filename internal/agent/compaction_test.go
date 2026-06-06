@@ -347,6 +347,77 @@ func TestRunReactiveCompactionRecovers(t *testing.T) {
 	}
 }
 
+// midStreamReactiveProvider forwards some text BEFORE surfacing a context-limit
+// error mid-stream, then succeeds on the same-turn retry. It exists to prove the
+// reactive retry collect does not re-stream OnText/OnUsage (double output).
+type midStreamReactiveProvider struct {
+	summarizeCalls int
+	turnRequests   int
+	failedOnce     bool
+	bigText        string
+	partialText    string
+	finalText      string
+}
+
+func (provider *midStreamReactiveProvider) StreamCompletion(_ context.Context, request zeroruntime.CompletionRequest) (<-chan zeroruntime.StreamEvent, error) {
+	if len(request.Tools) == 0 {
+		provider.summarizeCalls++
+		return streamEvents([]zeroruntime.StreamEvent{
+			{Type: zeroruntime.StreamEventText, Content: "SUMMARY"},
+			{Type: zeroruntime.StreamEventDone},
+		}), nil
+	}
+	provider.turnRequests++
+	switch {
+	case provider.turnRequests == 1:
+		return streamEvents(toolTurnWithText(provider.bigText, "1", "read_file", `{"path":"x"}`)), nil
+	case provider.turnRequests == 2 && !provider.failedOnce:
+		provider.failedOnce = true
+		// Some text is forwarded to OnText BEFORE the mid-stream error.
+		return streamEvents([]zeroruntime.StreamEvent{
+			{Type: zeroruntime.StreamEventText, Content: provider.partialText},
+			{Type: zeroruntime.StreamEventError, Error: "This model's maximum context length is 1000 tokens. Please reduce the length of the messages."},
+		}), nil
+	default:
+		return streamEvents(textTurn(provider.finalText)), nil
+	}
+}
+
+func TestRunReactiveRetryDoesNotDoubleEmitText(t *testing.T) {
+	provider := &midStreamReactiveProvider{
+		bigText:     strings.Repeat("b", 6000),
+		partialText: "partial-output ",
+		finalText:   "recovered",
+	}
+	registry := tools.NewRegistry()
+	registry.Register(tools.NewReadFileTool(t.TempDir()))
+
+	var deltas []string
+	result, err := Run(context.Background(), strings.Repeat("z", 6000), provider, Options{
+		Registry:               registry,
+		PermissionMode:         PermissionModeUnsafe,
+		ContextWindow:          10_000_000,
+		CompactionPreserveLast: 2,
+		OnText:                 func(delta string) { deltas = append(deltas, delta) },
+	})
+	if err != nil {
+		t.Fatalf("expected reactive compaction to recover, got error: %v", err)
+	}
+	if result.FinalAnswer != "recovered" {
+		t.Fatalf("expected recovered answer, got %q", result.FinalAnswer)
+	}
+	if provider.summarizeCalls == 0 {
+		t.Fatal("expected reactive compaction to run")
+	}
+	// The retried turn's text must be streamed to OnText at most once. Before the
+	// fix it was emitted on both the original (mid-stream) collect AND the retry
+	// collect, double-emitting the retried response.
+	joined := strings.Join(deltas, "")
+	if got := strings.Count(joined, "recovered"); got != 0 {
+		t.Fatalf("retried-turn text must NOT be re-streamed to OnText, saw %d occurrences in %q", got, joined)
+	}
+}
+
 func TestIsContextLimitError(t *testing.T) {
 	positives := []string{
 		"This model's maximum context length is 8192 tokens",
@@ -405,6 +476,53 @@ func TestCompactNeverProducesConsecutiveUserMessages(t *testing.T) {
 		if out[i].Role == zeroruntime.MessageRoleUser && out[i-1].Role == zeroruntime.MessageRoleUser {
 			t.Fatalf("consecutive user messages at %d in %+v", i, out)
 		}
+	}
+}
+
+func TestRecoverNoopDoesNotConsumeReactiveBudget(t *testing.T) {
+	st := newCompactionState(Options{ContextWindow: 1000, CompactionPreserveLast: 2})
+	provider := &mockProvider{turns: [][]zeroruntime.StreamEvent{{
+		{Type: zeroruntime.StreamEventText, Content: "SUMMARY"}, {Type: zeroruntime.StreamEventDone},
+	}}}
+
+	// First recover: history is too small to compact, so it is a no-op (not
+	// retried). This must NOT consume the one-shot reactive budget.
+	tiny := []zeroruntime.Message{
+		{Role: zeroruntime.MessageRoleSystem, Content: "sys"},
+		{Role: zeroruntime.MessageRoleUser, Content: "hi"},
+	}
+	_, retried, err := st.recover(context.Background(), provider, tiny, "context length exceeded")
+	if err != nil {
+		t.Fatalf("unexpected error from no-op recover: %v", err)
+	}
+	if retried {
+		t.Fatal("expected the too-small recover to be a no-op (not retried)")
+	}
+	if st.reactiveAttempted {
+		t.Fatal("a no-op recover must not consume the one-shot reactive budget")
+	}
+
+	// Second recover: now there is a compactible middle, so it must still fire.
+	big := []zeroruntime.Message{
+		{Role: zeroruntime.MessageRoleSystem, Content: "sys"},
+		{Role: zeroruntime.MessageRoleUser, Content: strings.Repeat("u", 4000)},
+		{Role: zeroruntime.MessageRoleAssistant, Content: strings.Repeat("a", 4000)},
+		{Role: zeroruntime.MessageRoleUser, Content: "u2"},
+		{Role: zeroruntime.MessageRoleAssistant, Content: "a2"},
+		{Role: zeroruntime.MessageRoleUser, Content: "u3"},
+	}
+	compacted, retried, err := st.recover(context.Background(), provider, big, "context length exceeded")
+	if err != nil {
+		t.Fatalf("unexpected error from second recover: %v", err)
+	}
+	if !retried {
+		t.Fatal("expected the second recover to compact and retry")
+	}
+	if estimateTokens(compacted) >= estimateTokens(big) {
+		t.Fatal("expected the second recover to actually shrink the history")
+	}
+	if !st.reactiveAttempted {
+		t.Fatal("a successful recover must consume the reactive budget")
 	}
 }
 

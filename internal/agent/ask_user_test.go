@@ -137,6 +137,37 @@ func TestRunAskUserHandlerErrorDegradesGracefully(t *testing.T) {
 	}
 }
 
+func TestRunAskUserRedactsSecretsInAnswers(t *testing.T) {
+	registry := registryWithAskUser()
+	secret := "sk-ant-api03-ABCDEFGHIJKLMNOP1234567890"
+	args := `{"questions":[{"question":"Paste your key"}]}`
+	provider := providerCallingAskUserThenAnswer(args, "done")
+
+	var captured ToolResult
+	_, err := Run(context.Background(), "clarify", provider, Options{
+		Registry:     registry,
+		OnToolResult: func(r ToolResult) { captured = r },
+		OnAskUser: func(_ context.Context, _ AskUserRequest) (AskUserResponse, error) {
+			return AskUserResponse{Answers: []string{"my key is " + secret}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(captured.Output, secret) {
+		t.Fatalf("secret leaked into ask_user tool result: %q", captured.Output)
+	}
+	if !captured.Redacted {
+		t.Error("expected Redacted=true when a secret was scrubbed from an ask_user answer")
+	}
+	// The redacted answer must also not reach the model.
+	for _, m := range provider.requests[1].Messages {
+		if strings.Contains(m.Content, secret) {
+			t.Fatalf("secret leaked into model message: %q", m.Content)
+		}
+	}
+}
+
 func TestRunAskUserRejectsMissingQuestions(t *testing.T) {
 	registry := registryWithAskUser()
 	provider := providerCallingAskUserThenAnswer(`{"questions":[]}`, "done")

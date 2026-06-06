@@ -128,6 +128,51 @@ func TestRunSpawnsSubAgentForTaskCall(t *testing.T) {
 	}
 }
 
+// A sub-agent's final answer is scrubbed before it becomes the task tool
+// result, so a secret a child surfaced never lands in the parent transcript.
+func TestRunRedactsSecretsInTaskChildFinalAnswer(t *testing.T) {
+	const childPrompt = "find the leaked key"
+	secret := "ghp_ABCDEFGHIJKLMNOP1234567890"
+	registry := tools.NewRegistry()
+	registry.Register(tools.NewTaskTool())
+	registry.Register(tools.NewReadFileTool(t.TempDir()))
+
+	provider := &routingProvider{
+		parentSubstr: "delegate please",
+		parentTurns: [][]zeroruntime.StreamEvent{
+			taskCallTurn(childPrompt),
+			textTurn("parent done"),
+		},
+		childTurns: [][]zeroruntime.StreamEvent{
+			textTurn("the key is " + secret),
+		},
+	}
+
+	var captured ToolResult
+	_, err := Run(context.Background(), "delegate please", provider, Options{
+		Registry:     registry,
+		MaxTurns:     5,
+		OnToolResult: func(r ToolResult) { captured = r },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(captured.Output, secret) {
+		t.Fatalf("secret leaked into task tool result: %q", captured.Output)
+	}
+	if !captured.Redacted {
+		t.Error("expected Redacted=true when a secret was scrubbed from a sub-agent final answer")
+	}
+	// The redacted answer must also not reach the parent model.
+	for _, request := range provider.requests {
+		for _, m := range request.Messages {
+			if strings.Contains(m.Content, secret) {
+				t.Fatalf("secret leaked into parent model message: %q", m.Content)
+			}
+		}
+	}
+}
+
 // (c) The child registry excludes task and ask_user, so the sub-run never
 // advertises them and can never recurse via task.
 func TestSubAgentRegistryExcludesTaskAndAskUser(t *testing.T) {

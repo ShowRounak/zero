@@ -819,6 +819,63 @@ func TestRunRetriesOnDroppedToolCall(t *testing.T) {
 	}
 }
 
+func TestRunSurfacesDroppedToolCallAlongsideValidCall(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("hi"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry()
+	registry.Register(tools.NewReadFileTool(root))
+
+	provider := &mockProvider{
+		turns: [][]zeroruntime.StreamEvent{
+			{
+				// One valid tool call AND a dropped (nameless) call in the same turn.
+				{Type: zeroruntime.StreamEventToolCallStart, ToolCallID: "call-1", ToolName: "read_file"},
+				{Type: zeroruntime.StreamEventToolCallDelta, ToolCallID: "call-1", ArgumentsFragment: `{"path":"notes.txt"}`},
+				{Type: zeroruntime.StreamEventToolCallEnd, ToolCallID: "call-1"},
+				{Type: zeroruntime.StreamEventToolCallDropped},
+				{Type: zeroruntime.StreamEventDone},
+			},
+			{
+				{Type: zeroruntime.StreamEventText, Content: "All done."},
+				{Type: zeroruntime.StreamEventDone},
+			},
+		},
+	}
+
+	result, err := Run(context.Background(), "do it", provider, Options{Registry: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FinalAnswer != "All done." {
+		t.Fatalf("expected final answer from retry turn, got %q", result.FinalAnswer)
+	}
+	if len(provider.requests) != 2 {
+		t.Fatalf("expected the loop to continue (2 turns), got %d", len(provider.requests))
+	}
+	// The valid tool call must still have executed (a tool result for call-1).
+	var sawToolResult bool
+	for _, m := range provider.requests[1].Messages {
+		if m.Role == zeroruntime.MessageRoleTool && m.ToolCallID == "call-1" {
+			sawToolResult = true
+		}
+	}
+	if !sawToolResult {
+		t.Fatalf("expected the valid tool call to execute, messages: %+v", provider.requests[1].Messages)
+	}
+	// The dropped call must ALSO be surfaced via the malformed-call notice.
+	var sawDroppedNotice bool
+	for _, m := range provider.requests[1].Messages {
+		if m.Role == zeroruntime.MessageRoleUser && strings.Contains(strings.ToLower(m.Content), "malformed") {
+			sawDroppedNotice = true
+		}
+	}
+	if !sawDroppedNotice {
+		t.Fatalf("expected a malformed-call notice for the dropped call, messages: %+v", provider.requests[1].Messages)
+	}
+}
+
 type secretEmittingTool struct{ output string }
 
 func (t secretEmittingTool) Name() string        { return "leak" }
