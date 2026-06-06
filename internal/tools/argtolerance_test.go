@@ -184,6 +184,38 @@ func TestGrepToolAcceptsPatternAndPathAliases(t *testing.T) {
 	}
 }
 
+func TestOptionalPathArgsTreatEmptyAsDefault(t *testing.T) {
+	// Weak models sometimes send an explicit empty path/cwd. These optional
+	// path args should fall back to "." (workspace root) just as if the key
+	// were absent, rather than erroring with "must be a non-empty string".
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "main.go"), "func main() {}\n")
+
+	grepRes := NewGrepTool(root).Run(context.Background(), map[string]any{"pattern": "func main", "path": ""})
+	if grepRes.Status != StatusOK {
+		t.Fatalf("grep path:\"\" expected ok, got %s: %s", grepRes.Status, grepRes.Output)
+	}
+	if !strings.Contains(grepRes.Output, "main.go") {
+		t.Fatalf("grep path:\"\" expected hit, got %q", grepRes.Output)
+	}
+
+	globRes := NewGlobTool(root).Run(context.Background(), map[string]any{"pattern": "**/*.go", "cwd": ""})
+	if globRes.Status != StatusOK {
+		t.Fatalf("glob cwd:\"\" expected ok, got %s: %s", globRes.Status, globRes.Output)
+	}
+	if !strings.Contains(globRes.Output, "main.go") {
+		t.Fatalf("glob cwd:\"\" expected match, got %q", globRes.Output)
+	}
+
+	listRes := NewListDirectoryTool(root).Run(context.Background(), map[string]any{"path": ""})
+	if listRes.Status != StatusOK {
+		t.Fatalf("list_directory path:\"\" expected ok, got %s: %s", listRes.Status, listRes.Output)
+	}
+	if !strings.Contains(listRes.Output, "main.go") {
+		t.Fatalf("list_directory path:\"\" expected listing, got %q", listRes.Output)
+	}
+}
+
 func TestWriteFileToolAcceptsPathAliases(t *testing.T) {
 	root := t.TempDir()
 	for _, key := range []string{"file", "file_path", "filename"} {

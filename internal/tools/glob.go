@@ -42,9 +42,14 @@ func (tool globTool) Run(_ context.Context, args map[string]any) Result {
 	if err != nil {
 		return errorResult("Error: Invalid arguments for glob: " + err.Error())
 	}
-	cwd, err := aliasedStringArg(args, []string{"cwd", "dir", "directory", "path"}, ".", false, false)
+	// Optional with a "." default: treat an explicit empty cwd (a common
+	// weak-model quirk) the same as the key being absent rather than erroring.
+	cwd, err := aliasedStringArg(args, []string{"cwd", "dir", "directory", "path"}, ".", false, true)
 	if err != nil {
 		return errorResult("Error: Invalid arguments for glob: " + err.Error())
+	}
+	if cwd == "" {
+		cwd = "."
 	}
 	limit, err := intArg(args, "limit", 100, 1, 1000)
 	if err != nil {

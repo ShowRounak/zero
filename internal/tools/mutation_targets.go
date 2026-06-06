@@ -7,7 +7,10 @@ package tools
 func MutationTargets(workspaceRoot string, name string, args map[string]any) []string {
 	switch name {
 	case "write_file", "edit_file":
-		path, err := stringArg(args, "path", "", true)
+		// Resolve the path via the SAME alias key list write_file/edit_file use,
+		// so a checkpoint is captured even when the model writes via an alias key
+		// (e.g. {"file": ...}); otherwise /rewind could not undo the write.
+		path, err := aliasedStringArg(args, []string{"path", "file", "file_path", "filename"}, "", true, false)
 		if err != nil {
 			return nil
 		}
@@ -17,7 +20,8 @@ func MutationTargets(workspaceRoot string, name string, args map[string]any) []s
 		}
 		return []string{relative}
 	case "apply_patch":
-		patch, err := stringArg(args, "patch", "", true)
+		// Resolve the patch via the SAME alias key list apply_patch uses.
+		patch, err := aliasedStringArg(args, []string{"patch", "diff"}, "", true, false)
 		if err != nil {
 			return nil
 		}

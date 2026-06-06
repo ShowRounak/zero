@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 )
 
 type PlanItem struct {
@@ -15,6 +16,9 @@ type PlanItem struct {
 
 type updatePlanTool struct {
 	baseTool
+	// mu guards currentPlan: Run() writes it on the agent goroutine while
+	// CurrentPlan()/ClearPlan() are called from the TUI goroutine (e.g. /plan).
+	mu          sync.Mutex
 	currentPlan []PlanItem
 }
 
@@ -62,16 +66,22 @@ func (tool *updatePlanTool) Run(_ context.Context, args map[string]any) Result {
 	if err != nil {
 		return errorResult("Error: Invalid arguments for update_plan: " + err.Error())
 	}
+	tool.mu.Lock()
 	tool.currentPlan = plan
+	tool.mu.Unlock()
 	return okResult(formatPlan(plan))
 }
 
 func (tool *updatePlanTool) CurrentPlan() []PlanItem {
+	tool.mu.Lock()
+	defer tool.mu.Unlock()
 	return append([]PlanItem{}, tool.currentPlan...)
 }
 
 func (tool *updatePlanTool) ClearPlan() {
+	tool.mu.Lock()
 	tool.currentPlan = nil
+	tool.mu.Unlock()
 }
 
 func parsePlanItems(value any) ([]PlanItem, error) {

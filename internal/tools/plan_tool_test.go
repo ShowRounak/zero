@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -128,6 +129,25 @@ func TestUpdatePlanToolRequiresContent(t *testing.T) {
 	if !strings.Contains(result.Output, "content is required") {
 		t.Fatalf("unexpected output: %q", result.Output)
 	}
+}
+
+func TestUpdatePlanToolConcurrentRunAndRead(t *testing.T) {
+	tool := NewUpdatePlanTool()
+	args := map[string]any{
+		"plan": []any{
+			map[string]any{"content": "First step", "status": "in_progress"},
+			map[string]any{"content": "Second step", "status": "pending"},
+		},
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(3)
+		go func() { defer wg.Done(); tool.Run(context.Background(), args) }()
+		go func() { defer wg.Done(); _ = tool.CurrentPlan() }()
+		go func() { defer wg.Done(); tool.ClearPlan() }()
+	}
+	wg.Wait()
 }
 
 func TestUpdatePlanToolAdvertisesItemSchema(t *testing.T) {

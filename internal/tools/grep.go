@@ -52,9 +52,14 @@ func (tool grepTool) Run(_ context.Context, args map[string]any) Result {
 	if err != nil {
 		return errorResult("Error: Invalid arguments for grep: " + err.Error())
 	}
-	targetPath, err := aliasedStringArg(args, []string{"path", "dir", "directory"}, ".", false, false)
+	// Optional with a "." default: treat an explicit empty path (a common
+	// weak-model quirk) the same as the key being absent rather than erroring.
+	targetPath, err := aliasedStringArg(args, []string{"path", "dir", "directory"}, ".", false, true)
 	if err != nil {
 		return errorResult("Error: Invalid arguments for grep: " + err.Error())
+	}
+	if targetPath == "" {
+		targetPath = "."
 	}
 	globPattern, err := stringArg(args, "glob", "", false)
 	if err != nil {

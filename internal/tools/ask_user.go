@@ -180,23 +180,3 @@ func FormatAskUserAnswers(questions []AskUserQuestion, answers []string) string 
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
-
-func stringSliceArg(args map[string]any, key string) ([]string, error) {
-	value, ok := args[key]
-	if !ok || value == nil {
-		return nil, nil
-	}
-	items, ok := value.([]any)
-	if !ok {
-		return nil, fmt.Errorf("%s must be an array of strings", key)
-	}
-	result := make([]string, 0, len(items))
-	for _, item := range items {
-		text, ok := item.(string)
-		if !ok {
-			return nil, fmt.Errorf("%s must be an array of strings", key)
-		}
-		result = append(result, text)
-	}
-	return result, nil
-}
