@@ -16,6 +16,17 @@ import (
 const defaultSystemPrompt = "You are Zero, a terminal coding agent. Help with the current workspace and use tools when needed."
 const maxTurnsAnswer = "Agent reached maximum number of turns without a final answer."
 
+// maxTaskDepth caps sub-agent (task) recursion. The top-level run is Depth 0, so
+// with maxTaskDepth = 2 a parent (0) may spawn a child (1) which may spawn a
+// grandchild (2); a task call AT Depth 2 is refused. This bounds the worst-case
+// fan-out and the call stack without forbidding useful one- or two-level
+// delegation.
+const maxTaskDepth = 2
+
+// maxTaskDepthAnswer is returned as the task tool result when the depth guard
+// trips, so the model gets a clear, actionable message instead of a silent stop.
+const maxTaskDepthAnswer = "Error: max sub-agent depth reached; cannot spawn another sub-agent. Complete this work directly."
+
 // confirmationPolicy is the de-branded safety policy appended to the system
 // prompt so the model self-polices before risky actions. It mirrors the
 // sandbox's enforced rules but applies model-side judgement first.
@@ -36,6 +47,13 @@ func buildSystemPrompt() string {
 func Run(ctx context.Context, prompt string, provider Provider, options Options) (Result, error) {
 	if provider == nil {
 		return Result{}, errors.New("agent provider is required")
+	}
+
+	// Inject the provider so executeToolCall can spawn a sub-agent (task) child
+	// run with the same provider, without changing Run's signature or callers.
+	// A caller that explicitly set Provider (e.g. a custom child provider) wins.
+	if options.Provider == nil {
+		options.Provider = provider
 	}
 
 	maxTurns := options.MaxTurns
@@ -271,6 +289,15 @@ func executeToolCall(ctx context.Context, registry *tools.Registry, call ToolCal
 		return executeAskUser(ctx, registry, call, args, options)
 	}
 
+	// task is intercepted here too: a normal tool's Run() has no access to the
+	// provider/registry needed to spawn a child agent run. When a provider is
+	// available and we are under the depth cap we run a synchronous sub-agent;
+	// otherwise it falls through to the tool's own graceful Run() (e.g. the
+	// "sub-agents are unavailable" fallback or the depth-limit error).
+	if call.Name == "task" {
+		return executeTask(ctx, registry, call, args, permissionMode, options)
+	}
+
 	tool, toolFound := registry.Get(call.Name)
 	permissionGranted := permissionMode == PermissionModeUnsafe
 	if toolFound && tool.Safety().Permission == tools.PermissionAllow {
@@ -343,6 +370,127 @@ func executeToolCall(ctx context.Context, registry *tools.Registry, call ToolCal
 		ChangedFiles: result.ChangedFiles,
 		Display:      result.Display,
 	}
+}
+
+// executeTask spawns a synchronous sub-agent run for a task tool call. It is the
+// task-tool counterpart to executeAskUser: the loop intercepts the call because
+// a normal tool's Run() cannot reach the provider/registry needed to start a
+// child run. The child shares ctx (so cancellation propagates) and inherits the
+// permission mode and sandbox, but runs with NO interactive callbacks — a
+// sub-agent must never prompt the user or ask questions. Recursion is bounded by
+// the depth guard and by stripping "task" from the child registry.
+func executeTask(ctx context.Context, registry *tools.Registry, call ToolCall, args map[string]any, permissionMode PermissionMode, options Options) ToolResult {
+	request, err := tools.ParseTaskRequest(args)
+	if err != nil {
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Status:     tools.StatusError,
+			Output:     "Error: Invalid arguments for task: " + err.Error(),
+		}
+	}
+
+	// No provider to spawn a child run: fall back to the tool's graceful Run().
+	if options.Provider == nil {
+		return taskFallbackResult(ctx, registry, call, args)
+	}
+
+	// Depth guard: refuse to spawn beyond the cap so a sub-agent can't recurse
+	// indefinitely. This is an error result (not a hard loop stop) so the parent
+	// model can recover by doing the work itself.
+	if options.Depth >= maxTaskDepth {
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Status:     tools.StatusError,
+			Output:     maxTaskDepthAnswer,
+		}
+	}
+
+	// Build the child run's options from the parent's, then isolate it:
+	//   - Depth+1 so the guard counts nesting.
+	//   - Registry without "task" (no infinite nesting) and "ask_user" (a
+	//     sub-agent has no interactive user to prompt).
+	//   - All interactive/observer callbacks cleared so the sub-run is fully
+	//     headless. Permission mode + sandbox + autonomy are inherited so the
+	//     child enforces the same safety policy.
+	childRegistry := options.Registry
+	if childRegistry == nil {
+		childRegistry = registry
+	}
+	if childRegistry != nil {
+		childRegistry = childRegistry.Without("task", "ask_user")
+	}
+
+	childOptions := Options{
+		MaxTurns:               options.MaxTurns,
+		ContextWindow:          options.ContextWindow,
+		CompactionPreserveLast: options.CompactionPreserveLast,
+		Provider:               options.Provider,
+		Depth:                  options.Depth + 1,
+		Registry:               childRegistry,
+		PermissionMode:         permissionMode,
+		Autonomy:               options.Autonomy,
+		Sandbox:                options.Sandbox,
+		EnabledTools:           options.EnabledTools,
+		DisabledTools:          options.DisabledTools,
+		// Interactive + observer callbacks intentionally left nil: the sub-run
+		// must not prompt the user, ask questions, or surface its inner tool
+		// activity as if it were the parent's.
+	}
+
+	childResult, runErr := Run(ctx, request.Prompt, options.Provider, childOptions)
+	if runErr != nil {
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Status:     tools.StatusError,
+			Output:     "Error: sub-agent failed: " + runErr.Error(),
+			Display:    tools.Display{Kind: "task", Summary: taskDisplaySummary(request, "failed")},
+		}
+	}
+
+	return ToolResult{
+		ToolCallID: call.ID,
+		Name:       call.Name,
+		Status:     tools.StatusOK,
+		Output:     childResult.FinalAnswer,
+		Display:    tools.Display{Kind: "task", Summary: taskDisplaySummary(request, "")},
+	}
+}
+
+// taskFallbackResult runs the registered task tool (its graceful Run()) so the
+// no-provider path matches the headless path, mirroring askUserFallbackResult.
+func taskFallbackResult(ctx context.Context, registry *tools.Registry, call ToolCall, args map[string]any) ToolResult {
+	if _, ok := registry.Get(call.Name); ok {
+		result := registry.Run(ctx, call.Name, args)
+		return ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Status:     result.Status,
+			Output:     result.Output,
+			Redacted:   result.Redacted,
+		}
+	}
+	return ToolResult{
+		ToolCallID: call.ID,
+		Name:       call.Name,
+		Status:     tools.StatusOK,
+		Output:     tools.TaskNonInteractiveMessage(),
+	}
+}
+
+// taskDisplaySummary builds a short, human-readable label for a task tool result.
+func taskDisplaySummary(request tools.TaskRequest, suffix string) string {
+	label := request.Description
+	if label == "" {
+		label = "sub-agent"
+	}
+	summary := "ran sub-agent: " + label
+	if suffix != "" {
+		summary += " (" + suffix + ")"
+	}
+	return summary
 }
 
 // executeAskUser routes an ask_user call to the interactive front-end via

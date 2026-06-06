@@ -62,6 +62,59 @@ func TestRegistryRunsToolsThroughSafePath(t *testing.T) {
 	}
 }
 
+func TestRegistryWithoutReturnsFilteredRegistry(t *testing.T) {
+	root := t.TempDir()
+	registry := NewRegistry()
+	registry.Register(NewReadFileTool(root))
+	registry.Register(NewAskUserTool())
+	registry.Register(NewTaskTool())
+
+	filtered := registry.Without("task", "ask_user")
+
+	if _, ok := filtered.Get("task"); ok {
+		t.Fatalf("expected task to be removed from filtered registry")
+	}
+	if _, ok := filtered.Get("ask_user"); ok {
+		t.Fatalf("expected ask_user to be removed from filtered registry")
+	}
+	if _, ok := filtered.Get("read_file"); !ok {
+		t.Fatalf("expected read_file to survive filtering")
+	}
+	if len(filtered.All()) != 1 {
+		t.Fatalf("expected exactly one tool after filtering, got %d", len(filtered.All()))
+	}
+
+	// The original registry must be untouched.
+	if _, ok := registry.Get("task"); !ok {
+		t.Fatalf("Without must not mutate the source registry (task missing)")
+	}
+	if len(registry.All()) != 3 {
+		t.Fatalf("expected source registry to keep all 3 tools, got %d", len(registry.All()))
+	}
+}
+
+func TestRegistryWithoutIgnoresUnknownNames(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(NewReadFileTool(t.TempDir()))
+
+	filtered := registry.Without("does_not_exist")
+	if len(filtered.All()) != 1 {
+		t.Fatalf("expected unknown names to be ignored, got %d tools", len(filtered.All()))
+	}
+}
+
+func TestCoreToolsIncludesTask(t *testing.T) {
+	var found bool
+	for _, tool := range CoreTools(t.TempDir()) {
+		if tool.Name() == "task" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected CoreTools to include the task tool")
+	}
+}
+
 func TestRegistryReportsUnknownTools(t *testing.T) {
 	result := NewRegistry().Run(context.Background(), "missing", map[string]any{})
 

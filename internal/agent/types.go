@@ -113,6 +113,15 @@ type Options struct {
 	// CompactionPreserveLast is how many trailing messages compaction keeps
 	// verbatim. <= 0 falls back to defaultCompactionPreserveLast.
 	CompactionPreserveLast int
+	// Provider is the completion provider used to spawn sub-agent (task) runs.
+	// It is normally left nil by callers: Run() injects the provider it was
+	// given at the top of the loop, so executeToolCall can start a child run
+	// with the same provider without changing Run's signature.
+	Provider Provider
+	// Depth is the sub-agent nesting level. The top-level run is Depth 0; each
+	// task interception spawns a child at Depth+1. A task call at or above
+	// maxTaskDepth is refused to prevent runaway recursion.
+	Depth                  int
 	Registry               *tools.Registry
 	PermissionMode         PermissionMode
 	Autonomy            string

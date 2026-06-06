@@ -44,6 +44,25 @@ func (registry *Registry) All() []Tool {
 	return tools
 }
 
+// Without returns a NEW registry containing every tool except the named ones.
+// The original registry is left untouched. This is used to scope down a child
+// run's toolset (e.g. a sub-agent must not see "task" or "ask_user"), without
+// mutating the parent's registry. Unknown names are silently ignored.
+func (registry *Registry) Without(names ...string) *Registry {
+	excluded := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		excluded[name] = struct{}{}
+	}
+	filtered := NewRegistry()
+	for name, tool := range registry.tools {
+		if _, drop := excluded[name]; drop {
+			continue
+		}
+		filtered.tools[name] = tool
+	}
+	return filtered
+}
+
 func (registry *Registry) Run(ctx context.Context, name string, args map[string]any) Result {
 	return registry.RunWithOptions(ctx, name, args, RunOptions{})
 }
@@ -160,5 +179,8 @@ func CoreTools(workspaceRoot string) []Tool {
 	tools := append([]Tool{}, CoreReadOnlyTools(workspaceRoot)...)
 	tools = append(tools, CoreWriteTools(workspaceRoot)...)
 	tools = append(tools, CoreShellTools(workspaceRoot)...)
+	// task spawns an isolated sub-agent run. Like ask_user, the agent loop
+	// intercepts it (the tool's Run() is a graceful fallback) — see task.go.
+	tools = append(tools, NewTaskTool())
 	return tools
 }
