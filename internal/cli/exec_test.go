@@ -254,7 +254,11 @@ func TestRunExecModeModelSurfacesDeprecationNoticeViaSharedPath(t *testing.T) {
 	}
 	// Sanity: the shared resolver surfaces a notice + redirect for a deprecated id,
 	// which is the path the mode model now feeds into.
-	resolved, notice := resolveSelectedModel("gpt-4-turbo")
+	registry, err := modelregistry.DefaultRegistry()
+	if err != nil {
+		t.Fatalf("DefaultRegistry: %v", err)
+	}
+	resolved, notice := resolveSelectedModel(registry, "gpt-4-turbo")
 	if resolved != "gpt-4.1" {
 		t.Fatalf("expected deprecated model to redirect to gpt-4.1, got %q", resolved)
 	}
@@ -630,16 +634,20 @@ func TestRunExecReasoningEffortNoticeForNonReasoningModel(t *testing.T) {
 }
 
 func TestReasoningEffortNoticeCoercesUnsupportedEffort(t *testing.T) {
+	registry, err := modelregistry.DefaultRegistry()
+	if err != nil {
+		t.Fatalf("DefaultRegistry: %v", err)
+	}
 	// claude-sonnet-4.5 supports low/medium/high with a medium default; xhigh is
 	// unsupported and should be coerced to the model default.
-	notice := reasoningEffortNotice("claude-sonnet-4.5", "xhigh")
+	notice := reasoningEffortNotice(registry, "claude-sonnet-4.5", "xhigh")
 	if !strings.Contains(notice, "not supported") || !strings.Contains(notice, "medium") {
 		t.Fatalf("expected coercion notice to default medium, got %q", notice)
 	}
-	if got := reasoningEffortNotice("claude-sonnet-4.5", "high"); got != "" {
+	if got := reasoningEffortNotice(registry, "claude-sonnet-4.5", "high"); got != "" {
 		t.Fatalf("expected no notice for a supported effort, got %q", got)
 	}
-	if got := reasoningEffortNotice("gpt-4.1", "high"); !strings.Contains(got, "does not support") {
+	if got := reasoningEffortNotice(registry, "gpt-4.1", "high"); !strings.Contains(got, "does not support") {
 		t.Fatalf("expected unsupported-model notice, got %q", got)
 	}
 }
@@ -835,4 +843,100 @@ func jsonEventTypes(events []map[string]any) []string {
 		types = append(types, eventType)
 	}
 	return types
+}
+
+// runExecWithEffectiveModel runs exec with the echo provider but forces the
+// resolved (effective) model regardless of any --model flag, so tests can
+// exercise behavior that depends on the effective model rather than the
+// override-supplied one.
+func runExecWithEffectiveModel(t *testing.T, effectiveModel string, args []string) (int, string, string) {
+	t.Helper()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cwd := t.TempDir()
+	exitCode := runWithDeps(args, &stdout, &stderr, appDeps{
+		getwd: func() (string, error) {
+			return cwd, nil
+		},
+		resolveConfig: func(_ string, _ config.Overrides) (config.ResolvedConfig, error) {
+			return config.ResolvedConfig{
+				ActiveProvider: "echo",
+				Provider: config.ProviderProfile{
+					Name:         "echo",
+					ProviderKind: config.ProviderKindOpenAICompatible,
+					BaseURL:      "http://127.0.0.1/v1",
+					Model:        effectiveModel,
+				},
+				MaxTurns: 3,
+			}, nil
+		},
+		newProvider: func(config.ProviderProfile) (zeroruntime.Provider, error) {
+			return echoExecProvider{}, nil
+		},
+	})
+	return exitCode, stdout.String(), stderr.String()
+}
+
+// TestRunExecReasoningEffortNoticeUsesEffectiveModel asserts that
+// --reasoning-effort is validated against the EFFECTIVE (resolved) model even
+// when --model is omitted, so the advisory notice still surfaces.
+func TestRunExecReasoningEffortNoticeUsesEffectiveModel(t *testing.T) {
+	// gpt-4.1 is a registry-known non-reasoning model. With no --model the
+	// override model is empty, so the notice must be evaluated against the
+	// effective model resolved by resolveConfig.
+	exitCode, stdout, stderr := runExecWithEffectiveModel(t, "gpt-4.1", []string{
+		"exec", "-r", "high", "hi",
+	})
+
+	if exitCode != exitSuccess {
+		t.Fatalf("expected exit code %d, got %d: %s", exitSuccess, exitCode, stderr)
+	}
+	if !strings.Contains(stderr, "does not support reasoning effort") {
+		t.Fatalf("expected effort notice for effective model on stderr, got %q", stderr)
+	}
+	if stdout == "" {
+		t.Fatal("expected run output on stdout")
+	}
+}
+
+// TestRunExecAutoHighEmitsUnsafeWarning asserts that --auto high (which resolves
+// to PermissionModeUnsafe) surfaces the same unsafe warning as
+// --skip-permissions-unsafe.
+func TestRunExecAutoHighEmitsUnsafeWarning(t *testing.T) {
+	exitCode, stdout, stderr := runExecWithEcho(t, []string{
+		"exec", "--auto", "high", "-o", "json", "hello",
+	})
+
+	if exitCode != exitSuccess {
+		t.Fatalf("expected exit code %d, got %d: %s", exitSuccess, exitCode, stderr)
+	}
+	if stderr != "" {
+		t.Fatalf("expected empty stderr, got %q", stderr)
+	}
+
+	events := decodeJSONLines(t, stdout)
+	if !slices.Contains(jsonEventTypes(events), "warning") {
+		t.Fatalf("expected JSON warning event for --auto high, got %v; output %q", jsonEventTypes(events), stdout)
+	}
+	if got := events[0]["permission_mode"]; got != "unsafe" {
+		t.Fatalf("expected run_start permission_mode unsafe, got %v", got)
+	}
+}
+
+// TestRunExecInvalidAutoValidatedWithSkipPermissions asserts that an invalid
+// --auto value is still rejected even when --skip-permissions-unsafe is also
+// passed (the unsafe path must not short-circuit --auto validation).
+func TestRunExecInvalidAutoValidatedWithSkipPermissions(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"exec", "--auto", "bogus", "--skip-permissions-unsafe", "hello"}, &stdout, &stderr)
+
+	if exitCode != exitUsage {
+		t.Fatalf("expected exit code %d, got %d", exitUsage, exitCode)
+	}
+	if got := stderr.String(); !strings.Contains(got, "Invalid autonomy level") {
+		t.Fatalf("expected autonomy validation error, got %q", got)
+	}
 }

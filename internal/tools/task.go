@@ -81,12 +81,6 @@ func (tool *taskTool) Run(_ context.Context, args map[string]any) Result {
 	return okResult(taskNonInteractiveMessage)
 }
 
-// TaskNonInteractiveMessage exposes the shared graceful-degradation message so
-// the agent loop and the tool fallback stay in lock-step.
-func TaskNonInteractiveMessage() string {
-	return taskNonInteractiveMessage
-}
-
 // ParseTaskRequest extracts the sub-task from raw tool arguments, tolerating the
 // key spellings different models emit. The prompt is accepted under any of
 // prompt/instructions/task/input; the description under description/title/label/

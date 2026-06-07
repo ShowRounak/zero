@@ -382,9 +382,8 @@ func executeToolCall(ctx context.Context, registry *tools.Registry, call ToolCal
 		PermissionMode:    string(permissionMode),
 		Autonomy:          options.Autonomy,
 		Sandbox:           options.Sandbox,
-		// Note: we no longer rely on OnSandboxDecision callback for capture here
-		// (it is still supported for other observers and is invoked asynchronously in the registry).
-		// The sandbox decision (if any) is now returned synchronously on the Result for permission event building.
+		// The sandbox decision (if any) is returned synchronously on the Result and
+		// used here for permission event building.
 	})
 	sandboxDecision := result.SandboxDecision
 	if toolFound && options.OnPermission != nil {

@@ -66,17 +66,6 @@ func TestResolveWithFallbackActiveNoNotice(t *testing.T) {
 	}
 }
 
-func TestFallbackFor(t *testing.T) {
-	reg := resolveTestRegistry(t)
-	m, ok := reg.FallbackFor("claude-sonnet-4-0")
-	if !ok || m.ID != "claude-sonnet-4-5" {
-		t.Fatalf("FallbackFor deprecated = %q,%v; want 4.5", m.ID, ok)
-	}
-	if _, ok := reg.FallbackFor("claude-sonnet-4-5"); ok {
-		t.Error("active model should have no fallback")
-	}
-}
-
 func TestEffectiveReasoningEffort(t *testing.T) {
 	reg := resolveTestRegistry(t)
 	m, _ := reg.Get("claude-sonnet-4-5")

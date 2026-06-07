@@ -21,16 +21,6 @@ func (registry Registry) Resolve(input string) (ModelEntry, bool) {
 	return ModelEntry{}, false
 }
 
-// FallbackFor returns the replacement model declared by a model's deprecation
-// rule, if any.
-func (registry Registry) FallbackFor(input string) (ModelEntry, bool) {
-	model, ok := registry.Get(input)
-	if !ok || model.Deprecation == nil || strings.TrimSpace(model.Deprecation.FallbackID) == "" {
-		return ModelEntry{}, false
-	}
-	return registry.Get(model.Deprecation.FallbackID)
-}
-
 // ResolveWithFallback resolves input (exact/alias/pattern) and, when the resolved
 // model is deprecated and declares a fallback, redirects to the replacement. The
 // returned notice is non-empty when a redirect happened or a soft-deprecation

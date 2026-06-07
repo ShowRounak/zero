@@ -42,6 +42,11 @@ type execOptions struct {
 	file                  string
 	mode                  string
 	model                 string
+	// modelProfile captures the legacy --profile flag. It is accepted for
+	// backward compatibility (so old invocations do not error) but is
+	// intentionally inert: nothing consumes it. Model selection is driven by
+	// --model / --mode instead. See writeExecHelp ("Accept legacy model profile
+	// selection") and TestRunExecAcceptsLegacyModelProfileFlags.
 	modelProfile          string
 	reasoningEffort       string
 	maxTurns              int
@@ -143,16 +148,19 @@ func runExec(args []string, stdout io.Writer, stderr io.Writer, deps appDeps) in
 		return writeExecFormatUsageError(stdout, stderr, options.outputFormat, err.Error())
 	}
 
+	// Build the model registry once and reuse it across every model-aware
+	// lookup in this exec run (model resolution, reasoning-effort advisory, and
+	// context-window sizing). DefaultRegistry builds the full catalog and
+	// compiles its match patterns, so rebuilding it per lookup is wasteful.
+	// modelRegistry is the zero Registry when the catalog fails to build; the
+	// helpers below degrade to safe no-op behavior in that case.
+	modelRegistry, _ := modelregistry.DefaultRegistry()
+
 	overrides := config.Overrides{}
 	if options.model != "" {
-		resolvedModel, notice := resolveSelectedModel(options.model)
+		resolvedModel, notice := resolveSelectedModel(modelRegistry, options.model)
 		overrides.Provider.Model = resolvedModel
 		if notice != "" {
-			fmt.Fprintln(stderr, notice)
-		}
-	}
-	if options.reasoningEffort != "" {
-		if notice := reasoningEffortNotice(overrides.Provider.Model, options.reasoningEffort); notice != "" {
 			fmt.Fprintln(stderr, notice)
 		}
 	}
@@ -165,6 +173,15 @@ func runExec(args []string, stdout io.Writer, stderr io.Writer, deps appDeps) in
 	}
 	if resolved.Provider == (config.ProviderProfile{}) {
 		return writeExecProviderError(stdout, stderr, options.outputFormat, "provider_error", "No provider configured. Set OPENAI_MODEL/OPENAI_API_KEY or add .zero/config.json.")
+	}
+	// Evaluate the --reasoning-effort advisory against the EFFECTIVE resolved
+	// model (resolved.Provider.Model), not the override. Without an explicit
+	// --model the override model is empty, so checking it here would silently
+	// skip the advisory even though the run uses a concrete effective model.
+	if options.reasoningEffort != "" {
+		if notice := reasoningEffortNotice(modelRegistry, resolved.Provider.Model, options.reasoningEffort); notice != "" {
+			fmt.Fprintln(stderr, notice)
+		}
 	}
 
 	provider, err := buildProvider(resolved, deps)
@@ -209,8 +226,16 @@ func runExec(args []string, stdout io.Writer, stderr io.Writer, deps appDeps) in
 	if writer.err != nil {
 		return exitCrash
 	}
-	if options.skipPermissionsUnsafe {
-		writer.warning("Unsafe permissions are active for this run because --skip-permissions-unsafe was passed.")
+	// Surface the unsafe-permissions warning whenever the run resolves to unsafe
+	// mode, covering BOTH --skip-permissions-unsafe and --auto high (which also
+	// resolves to PermissionModeUnsafe). Previously only the explicit flag path
+	// warned, so --auto high silently ran without notice.
+	if permissionMode == agent.PermissionModeUnsafe {
+		reason := "--auto high"
+		if options.skipPermissionsUnsafe {
+			reason = "--skip-permissions-unsafe"
+		}
+		writer.warning(fmt.Sprintf("Unsafe permissions are active for this run because %s was passed.", reason))
 		if writer.err != nil {
 			return exitCrash
 		}
@@ -228,7 +253,7 @@ func runExec(args []string, stdout io.Writer, stderr io.Writer, deps appDeps) in
 	// input when a controlling client is attached.)
 	result, err := agent.Run(context.Background(), agentPrompt, provider, agent.Options{
 		MaxTurns:       resolved.MaxTurns,
-		ContextWindow:  modelContextWindow(resolved.Provider.Model),
+		ContextWindow:  modelContextWindow(modelRegistry, resolved.Provider.Model),
 		Registry:       registry,
 		PermissionMode: permissionMode,
 		Autonomy:       options.autonomy,
@@ -480,13 +505,9 @@ func applyExecMode(options *execOptions) error {
 // to use plus a non-empty notice when a deprecation redirect or warning applies.
 // Inputs that the registry does not recognize (e.g. custom openai-compatible
 // model names) are returned unchanged so provider passthrough still works.
-func resolveSelectedModel(input string) (string, string) {
+func resolveSelectedModel(registry modelregistry.Registry, input string) (string, string) {
 	trimmed := strings.TrimSpace(input)
 	if trimmed == "" {
-		return input, ""
-	}
-	registry, err := modelregistry.DefaultRegistry()
-	if err != nil {
 		return input, ""
 	}
 	entry, notice, ok := registry.ResolveWithFallback(trimmed)
@@ -500,13 +521,9 @@ func resolveSelectedModel(input string) (string, string) {
 // tokens) from the model registry, used to enable agent-loop compaction. An
 // unknown model (e.g. a custom openai-compatible name) returns 0, which leaves
 // compaction DISABLED — a safe default that never compacts unexpectedly.
-func modelContextWindow(modelID string) int {
+func modelContextWindow(registry modelregistry.Registry, modelID string) int {
 	trimmed := strings.TrimSpace(modelID)
 	if trimmed == "" {
-		return 0
-	}
-	registry, err := modelregistry.DefaultRegistry()
-	if err != nil {
 		return 0
 	}
 	entry, ok := registry.Resolve(trimmed)
@@ -524,13 +541,9 @@ func modelContextWindow(modelID string) int {
 // NOTE: the effective effort is not yet forwarded to the provider request — the
 // zeroruntime.CompletionRequest / provider wire schemas carry no effort field.
 // Full provider-request propagation is deferred (see slice-3 report).
-func reasoningEffortNotice(modelID string, requested string) string {
+func reasoningEffortNotice(registry modelregistry.Registry, modelID string, requested string) string {
 	trimmed := strings.TrimSpace(modelID)
 	if trimmed == "" {
-		return ""
-	}
-	registry, err := modelregistry.DefaultRegistry()
-	if err != nil {
 		return ""
 	}
 	entry, ok := registry.Get(trimmed)
