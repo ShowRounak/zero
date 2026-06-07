@@ -279,3 +279,16 @@ func stripANSI(s string) string {
 	}
 	return b.String()
 }
+
+func TestPermLayoutDisablesHitboxesWhenButtonsClipped(t *testing.T) {
+	// At a clamped/too-short height the button row can't render; hitboxes must be
+	// inactive so a click can't resolve to allow/deny on a non-button row.
+	g := PermLayout(80, 8) // height floors to 8 -> bodyH=5 < top+permBtnRow
+	if g.Active {
+		t.Fatalf("expected inactive geometry when buttons are clipped, got %+v", g)
+	}
+	// A roomy height still yields active, positioned buttons.
+	if big := PermLayout(80, 30); !big.Active || big.Allow.W == 0 {
+		t.Fatalf("expected active geometry at full height, got %+v", big)
+	}
+}

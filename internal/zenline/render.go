@@ -387,6 +387,12 @@ func PermLayout(width, height int) PermGeometry {
 	if top < 0 {
 		top = 0
 	}
+	// If the body is too short to actually render the button row, the modal is
+	// clipped above the buttons — disable the hitboxes so a click can't resolve
+	// to allow/deny on a row where no button is drawn.
+	if top+permBtnRow >= bodyH {
+		return PermGeometry{Active: false}
+	}
 	bx := (width - bw) / 2
 	if bx < 0 {
 		bx = 0

@@ -13,7 +13,7 @@ import (
 // the idle timeout, cancels the request context, and returns ErrStreamIdle.
 func TestScanSSEDataWithContextAbortsOnIdle(t *testing.T) {
 	pr, pw := io.Pipe()
-	defer pw.Close()
+	defer func() { _ = pw.Close() }()
 
 	// Send one event, then never send anything else and never close.
 	go func() {
@@ -52,7 +52,7 @@ func TestScanSSEDataWithContextAbortsOnIdle(t *testing.T) {
 // ctx cancellation must unblock a hung read and surface ctx.Err().
 func TestScanSSEDataWithContextHonorsContextCancel(t *testing.T) {
 	pr, pw := io.Pipe()
-	defer pw.Close()
+	defer func() { _ = pw.Close() }()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

@@ -56,15 +56,17 @@ type model struct {
 	runCancel          context.CancelFunc
 	runID              int
 	activeRunID        int
-	// flushRunID is the id of a run that was cancelled while still in flight. Its
-	// agent goroutine keeps running to completion and returns its accumulated
-	// sessionEvents (including EventSessionCheckpoint payloads captured before each
-	// mutating tool) in a final agentResponseMsg. activeRunID is already zeroed by
-	// then, so without this the message would be dropped and the checkpoint blobs
-	// already written to disk would be orphaned (breaking /rewind). The
-	// agentResponseMsg handler persists this run's session events (only) so the
-	// checkpoints stay referenced.
-	flushRunID        int
+	// flushRunIDs holds the ids of runs cancelled while still in flight. Each
+	// cancelled agent goroutine keeps running to completion and returns its
+	// accumulated sessionEvents (including EventSessionCheckpoint payloads captured
+	// before each mutating tool) in a final agentResponseMsg. activeRunID is
+	// already zeroed by then, so without this the message would be dropped and the
+	// checkpoint blobs already written to disk would be orphaned (breaking
+	// /rewind). It is a SET (not a single id) so a second cancel before the first
+	// goroutine returns doesn't overwrite/lose the first run's pending flush. The
+	// agentResponseMsg handler persists each such run's session events (only) so
+	// the checkpoints stay referenced, then removes the id.
+	flushRunIDs       map[int]struct{}
 	pendingPermission *pendingPermissionPrompt
 	pendingAskUser    *pendingAskUserPrompt
 	width             int
@@ -277,10 +279,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m.handleSubmit()
 		case tea.KeyShiftTab:
-			// shift+tab cycles the permission mode (Auto→Ask→Unsafe→Auto), but
-			// only when nothing modal is up: a permission prompt, ask_user
-			// questionnaire, or open picker all take precedence and let the key
-			// fall through to their own handlers below.
+			// shift+tab toggles the permission mode between Auto and Ask (Unsafe
+			// is intentionally not reachable by a casual keypress — see
+			// nextPermissionMode), but only when nothing modal is up: a permission
+			// prompt, ask_user questionnaire, or open picker all take precedence
+			// and let the key fall through to their own handlers below.
 			if m.pendingPermission == nil && m.pendingAskUser == nil && m.picker == nil {
 				m.permissionMode = nextPermissionMode(m.permissionMode)
 				return m, nil
@@ -408,8 +411,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// works; the cancel path already wrote the "Run cancelled." marker, so
 			// skip transcript rows, the trailing cancellation error, and any pending
 			// state changes.
-			if msg.runID == m.flushRunID && m.flushRunID != 0 {
-				m.flushRunID = 0
+			if _, flushing := m.flushRunIDs[msg.runID]; flushing {
+				delete(m.flushRunIDs, msg.runID)
 				m, _ = m.appendSessionEvents(flushableSessionEvents(msg.sessionEvents))
 			}
 			return m, nil
@@ -851,7 +854,10 @@ func (m *model) cancelRun() {
 	// checkpoint blobs it captured before each mutating tool are orphaned on disk
 	// and /rewind can't reference them.
 	if m.pending && m.activeRunID != 0 {
-		m.flushRunID = m.activeRunID
+		if m.flushRunIDs == nil {
+			m.flushRunIDs = make(map[int]struct{})
+		}
+		m.flushRunIDs[m.activeRunID] = struct{}{}
 	}
 	if m.pending && m.activeSession.SessionID != "" {
 		if next, err := (*m).appendSessionEvent(sessions.EventError, map[string]any{

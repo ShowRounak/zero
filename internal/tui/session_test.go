@@ -753,7 +753,7 @@ func TestCancelledRunFlushesCheckpointSessionEvents(t *testing.T) {
 	if next.pending {
 		t.Fatal("expected Esc to clear pending state")
 	}
-	if next.flushRunID == 0 {
+	if len(next.flushRunIDs) == 0 {
 		t.Fatal("expected cancelled run to be flagged for session-event flush")
 	}
 
@@ -763,8 +763,8 @@ func TestCancelledRunFlushesCheckpointSessionEvents(t *testing.T) {
 	finalMsg := receiveFinalMessage(t, finalCh)
 	updated, _ = next.Update(finalMsg)
 	next = updated.(model)
-	if next.flushRunID != 0 {
-		t.Fatalf("expected flush flag to clear after draining cancelled run, got %d", next.flushRunID)
+	if len(next.flushRunIDs) != 0 {
+		t.Fatalf("expected flush set to clear after draining cancelled run, got %v", next.flushRunIDs)
 	}
 
 	events := readOnlySessionEvents(t, store)

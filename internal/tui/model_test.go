@@ -1068,9 +1068,10 @@ func TestShiftTabCyclesPermissionMode(t *testing.T) {
 	m := newModel(context.Background(), Options{PermissionMode: agent.PermissionModeAuto})
 	m.width = 96
 
+	// shift+tab toggles Auto<->Ask only; Unsafe is intentionally NOT reachable by
+	// a casual keypress (it disables permission prompts).
 	for _, want := range []agent.PermissionMode{
 		agent.PermissionModeAsk,
-		agent.PermissionModeUnsafe,
 		agent.PermissionModeAuto,
 	} {
 		updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
@@ -1080,6 +1081,9 @@ func TestShiftTabCyclesPermissionMode(t *testing.T) {
 		}
 		if m.permissionMode != want {
 			t.Fatalf("expected permission mode %q after shift+tab, got %q", want, m.permissionMode)
+		}
+		if m.permissionMode == agent.PermissionModeUnsafe {
+			t.Fatalf("shift+tab must never land on Unsafe")
 		}
 	}
 

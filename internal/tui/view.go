@@ -72,17 +72,18 @@ func (m model) modeSegment() string {
 	return style.Render("⏵⏵ "+label) + zeroTheme.muted.Render(" · shift+tab to cycle")
 }
 
-// nextPermissionMode advances the permission mode in the order the status bar
-// advertises: Auto → Ask → Unsafe → Auto. Any unrecognized value resets to Auto.
+// nextPermissionMode toggles between the two prompt-respecting modes:
+// Auto ⇄ Ask. Unsafe (which disables permission prompts entirely) is
+// deliberately NOT reachable by a casual keypress — a single shift+tab landing
+// on it would let prompt-required tools run with no decision. Unsafe stays an
+// explicit opt-in (the launch/--skip-permissions-unsafe path), not a UI toggle.
+// Unsafe is folded back to Ask so the toggle always lands somewhere safe.
 func nextPermissionMode(mode agent.PermissionMode) agent.PermissionMode {
 	switch mode {
 	case agent.PermissionModeAuto:
 		return agent.PermissionModeAsk
-	case agent.PermissionModeAsk:
-		return agent.PermissionModeUnsafe
-	case agent.PermissionModeUnsafe:
-		return agent.PermissionModeAuto
 	default:
+		// Ask (and anything else, incl. an externally-set Unsafe) → Auto.
 		return agent.PermissionModeAuto
 	}
 }

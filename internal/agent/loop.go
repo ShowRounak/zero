@@ -143,13 +143,15 @@ func Run(ctx context.Context, prompt string, provider Provider, options Options)
 					result.Messages = copyMessages(messages)
 					return result, retryStreamErr
 				}
-				// Omit OnText/OnUsage on the reactive retry: when the original
-				// error surfaced MID-stream, partial text was already forwarded to
-				// the user. Re-streaming the retried response on top of it would
-				// duplicate output. Mirroring summarizeClosure, the recovery stays
-				// invisible — the retried text is still captured in collected.Text
-				// and becomes the turn's assistant message.
-				collected = zeroruntime.CollectStreamWithOptions(ctx, retryStream, zeroruntime.CollectOptions{})
+				// Omit OnText on the reactive retry: when the original error
+				// surfaced MID-stream, partial text was already forwarded to the
+				// user. Re-streaming the retried response on top of it would
+				// duplicate output. OnUsage IS kept so token telemetry/budgeting
+				// still counts the successful retry. The retried text is captured
+				// in collected.Text and becomes the turn's assistant message.
+				collected = zeroruntime.CollectStreamWithOptions(ctx, retryStream, zeroruntime.CollectOptions{
+					OnUsage: options.OnUsage,
+				})
 			}
 		}
 		if collected.Error != "" {

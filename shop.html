@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Northwind Goods — Curated everyday essentials</title>
+  <style>
+    /* ---------- Base ---------- */
+    *, *::before, *::after { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                   "Helvetica Neue", Arial, sans-serif;
+      color: #1f2937;
+      background: #fafaf9;
+      line-height: 1.55;
+    }
+    a { color: inherit; text-decoration: none; }
+    img { max-width: 100%; display: block; }
+    h1, h2, h3 { margin: 0 0 0.5em; line-height: 1.2; }
+    h1 { font-size: clamp(2rem, 4vw + 1rem, 3.5rem); font-weight: 700; }
+    h2 { font-size: clamp(1.5rem, 2vw + 1rem, 2.25rem); font-weight: 700; }
+    p  { margin: 0 0 1em; }
+    .container { width: min(1100px, 90%); margin: 0 auto; }
+
+    /* ---------- Header ---------- */
+    header {
+      position: sticky; top: 0; z-index: 10;
+      background: rgba(255,255,255,0.85);
+      backdrop-filter: saturate(180%) blur(10px);
+      border-bottom: 1px solid #e7e5e4;
+    }
+    .nav {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0.9rem 0;
+    }
+    .logo {
+      font-weight: 700; font-size: 1.15rem; letter-spacing: -0.01em;
+      display: flex; align-items: center; gap: 0.5rem;
+    }
+    .logo-mark {
+      width: 28px; height: 28px; border-radius: 8px;
+      background: linear-gradient(135deg, #f97316, #db2777);
+      display: inline-block;
+    }
+    nav ul { list-style: none; display: flex; gap: 1.5rem; margin: 0; padding: 0; }
+    nav a { font-size: 0.95rem; color: #44403c; }
+    nav a:hover { color: #db2777; }
+    .cart-btn {
+      border: 1px solid #e7e5e4; background: white;
+      padding: 0.45rem 0.9rem; border-radius: 999px;
+      font-size: 0.9rem; cursor: pointer; transition: all 0.2s;
+    }
+    .cart-btn:hover { background: #1f2937; color: white; border-color: #1f2937; }
+
+    /* ---------- Hero ---------- */
+    .hero {
+      padding: 5rem 0 4rem;
+      background:
+        radial-gradient(1200px 400px at 80% 0%, rgba(219,39,119,0.10), transparent),
+        radial-gradient(900px 400px at 0% 20%, rgba(249,115,22,0.10), transparent);
+    }
+    .hero-inner { display: grid; gap: 2.5rem; align-items: center; }
+    .hero .eyebrow {
+      display: inline-block; font-size: 0.8rem; font-weight: 600;
+      letter-spacing: 0.12em; text-transform: uppercase;
+      color: #db2777; margin-bottom: 1rem;
+    }
+    .hero p.lede { font-size: 1.1rem; color: #57534e; max-width: 38rem; }
+    .cta-row { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1.25rem; }
+    .btn {
+      display: inline-block; padding: 0.75rem 1.25rem;
+      border-radius: 10px; font-weight: 600; font-size: 0.95rem;
+      cursor: pointer; transition: transform 0.1s ease, background 0.2s;
+      border: 1px solid transparent;
+    }
+    .btn-primary { background: #1f2937; color: white; }
+    .btn-primary:hover { background: #000; transform: translateY(-1px); }
+    .btn-ghost { background: white; color: #1f2937; border-color: #e7e5e4; }
+    .btn-ghost:hover { border-color: #1f2937; }
+
+    .hero-art {
+      aspect-ratio: 4 / 3; border-radius: 20px;
+      background:
+        linear-gradient(135deg, rgba(249,115,22,0.85), rgba(219,39,119,0.85)),
+        repeating-linear-gradient(45deg, rgba(255,255,255,0.06) 0 10px, transparent 10px 20px);
+      box-shadow: 0 30px 60px -20px rgba(31,41,55,0.35);
+      position: relative; overflow: hidden;
+    }
+    .hero-art::after {
+      content: "New Season";
+      position: absolute; bottom: 1.25rem; left: 1.25rem;
+      background: rgba(255,255,255,0.95); color: #1f2937;
+      padding: 0.4rem 0.8rem; border-radius: 999px;
+      font-size: 0.8rem; font-weight: 600;
+    }
+
+    @media (min-width: 800px) {
+      .hero-inner { grid-template-columns: 1.1fr 1fr; }
+    }
+
+    /* ---------- Section ---------- */
+    section { padding: 4rem 0; }
+    .section-head { text-align: center; margin-bottom: 2.5rem; }
+    .section-head p { color: #57534e; }
+
+    /* ---------- Products ---------- */
+    .grid {
+      display: grid; gap: 1.5rem;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }
+    .card {
+      background: white; border: 1px solid #e7e5e4;
+      border-radius: 16px; overflow: hidden;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+      display: flex; flex-direction: column;
+    }
+    .card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 20px 30px -15px rgba(31,41,55,0.15);
+    }
+    .thumb {
+      aspect-ratio: 4 / 3;
+      background: linear-gradient(135deg, #fde68a, #fca5a5);
+    }
+    .card:nth-child(2) .thumb { background: linear-gradient(135deg, #bae6fd, #a7f3d0); }
+    .card:nth-child(3) .thumb { background: linear-gradient(135deg, #ddd6fe, #fbcfe8); }
+    .card:nth-child(4) .thumb { background: linear-gradient(135deg, #fed7aa, #fecaca); }
+    .card-body { padding: 1rem 1.1rem 1.2rem; display: flex; flex-direction: column; gap: 0.4rem; }
+    .price-row {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-top: 0.5rem;
+    }
+    .price { font-weight: 700; font-size: 1.05rem; }
+    .tag {
+      font-size: 0.7rem; font-weight: 600; letter-spacing: 0.05em;
+      text-transform: uppercase; padding: 0.2rem 0.5rem; border-radius: 999px;
+      background: #f5f5f4; color: #57534e;
+    }
+    .add {
+      margin-top: 0.4rem; width: 100%;
+      background: #1f2937; color: white; border: none;
+      padding: 0.55rem 0.8rem; border-radius: 8px;
+      font-size: 0.9rem; font-weight: 600; cursor: pointer;
+      transition: background 0.2s;
+    }
+    .add:hover { background: #db2777; }
+
+    /* ---------- About ---------- */
+    .about { background: #f5f5f4; }
+    .about-inner { display: grid; gap: 2rem; align-items: center; }
+    @media (min-width: 800px) {
+      .about-inner { grid-template-columns: 1fr 1.2fr; }
+    }
+    .about .stat {
+      display: flex; gap: 1.5rem; flex-wrap: wrap; margin-top: 1.5rem;
+    }
+    .stat div { min-width: 120px; }
+    .stat strong { display: block; font-size: 1.6rem; color: #1f2937; }
+    .stat span { color: #57534e; font-size: 0.9rem; }
+
+    /* ---------- Newsletter ---------- */
+    .newsletter {
+      background: #1f2937; color: white; border-radius: 20px;
+      padding: 2.5rem 2rem; text-align: center;
+      background-image:
+        radial-gradient(600px 200px at 0% 0%, rgba(219,39,119,0.35), transparent),
+        radial-gradient(600px 200px at 100% 100%, rgba(249,115,22,0.35), transparent);
+    }
+    .newsletter form {
+      margin-top: 1.25rem;
+      display: flex; gap: 0.5rem; justify-content: center; flex-wrap: wrap;
+    }
+    .newsletter input {
+      padding: 0.75rem 1rem; border-radius: 10px; border: none;
+      min-width: 260px; font-size: 0.95rem;
+    }
+    .newsletter .btn-primary { background: white; color: #1f2937; }
+    .newsletter .btn-primary:hover { background: #f5f5f4; }
+
+    /* ---------- Footer ---------- */
+    footer {
+      background: #fafaf9; border-top: 1px solid #e7e5e4;
+      padding: 2.5rem 0; color: #57534e; font-size: 0.9rem;
+    }
+    .foot {
+      display: flex; flex-wrap: wrap; gap: 1.5rem;
+      align-items: center; justify-content: space-between;
+    }
+    .foot .links { display: flex; gap: 1.25rem; }
+    .foot a:hover { color: #1f2937; }
+  </style>
+</head>
+<body>
+
+  <!-- ===== Header ===== -->
+  <header>
+    <div class="container nav">
+      <a href="#" class="logo">
+        <span class="logo-mark" aria-hidden="true"></span>
+        Northwind&nbsp;Goods
+      </a>
+      <nav aria-label="Primary">
+        <ul>
+          <li><a href="#shop">Shop</a></li>
+          <li><a href="#about">About</a></li>
+          <li><a href="#contact">Contact</a></li>
+        </ul>
+      </nav>
+      <button class="cart-btn" aria-label="Open cart">🛒 Cart (0)</button>
+    </div>
+  </header>
+
+  <!-- ===== Hero ===== -->
+  <section class="hero">
+    <div class="container hero-inner">
+      <div>
+        <span class="eyebrow">New · Autumn 2025</span>
+        <h1>Thoughtful goods for everyday living.</h1>
+        <p class="lede">
+          We curate a small, well-made collection of home and lifestyle
+          essentials — sourced from independent makers, built to last.
+        </p>
+        <div class="cta-row">
+          <a href="#shop" class="btn btn-primary">Shop the collection</a>
+          <a href="#about" class="btn btn-ghost">Our story</a>
+        </div>
+      </div>
+      <div class="hero-art" role="img" aria-label="Autumn collection hero image"></div>
+    </div>
+  </section>
+
+  <!-- ===== Products ===== -->
+  <section id="shop">
+    <div class="container">
+      <div class="section-head">
+        <h2>Featured this week</h2>
+        <p>A few favourites from the workshop — refreshed every Monday.</p>
+      </div>
+      <div class="grid">
+
+        <article class="card">
+          <div class="thumb" aria-hidden="true"></div>
+          <div class="card-body">
+            <span class="tag">Home</span>
+            <h3>Stoneware Mug</h3>
+            <p>Hand-thrown, 12oz. Dishwasher safe.</p>
+            <div class="price-row">
+              <span class="price">$28</span>
+            </div>
+            <button class="add" type="button">Add to cart</button>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="thumb" aria-hidden="true"></div>
+          <div class="card-body">
+            <span class="tag">Kitchen</span>
+            <h3>Linen Tea Towel</h3>
+            <p>Soft, absorbent, and quick to dry.</p>
+            <div class="price-row">
+              <span class="price">$18</span>
+            </div>
+            <button class="add" type="button">Add to cart</button>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="thumb" aria-hidden="true"></div>
+          <div class="card-body">
+            <span class="tag">Outdoors</span>
+            <h3>Wool Throw</h3>
+            <p>Heavy-weave wool, perfect for cool nights.</p>
+            <div class="price-row">
+              <span class="price">$96</span>
+            </div>
+            <button class="add" type="button">Add to cart</button>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="thumb" aria-hidden="true"></div>
+          <div class="card-body">
+            <span class="tag">Office</span>
+            <h3>Walnut Notebook</h3>
+            <p>100gsm paper, lays flat on any surface.</p>
+            <div class="price-row">
+              <span class="price">$24</span>
+            </div>
+            <button class="add" type="button">Add to cart</button>
+          </div>
+        </article>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== About ===== -->
+  <section id="about" class="about">
+    <div class="container about-inner">
+      <div>
+        <h2>Small shop. Big care.</h2>
+        <p>
+          Northwind Goods started as a weekend hobby in 2019 and has grown
+          into a small studio of four. Every product in our store is
+          something we use ourselves — and we ship from a single,
+          low-waste warehouse in Portland, Oregon.
+        </p>
+        <div class="stat">
+          <div><strong>400+</strong><span>Products in rotation</span></div>
+          <div><strong>42</strong><span>Independent makers</span></div>
+          <div><strong>4.9★</strong><span>Average review</span></div>
+        </div>
+      </div>
+      <div class="hero-art" style="border-radius:20px;" role="img" aria-label="Inside the studio"></div>
+    </div>
+  </section>
+
+  <!-- ===== Contact / Newsletter ===== -->
+  <section id="contact">
+    <div class="container">
+      <div class="newsletter">
+        <h2>Stay in the loop</h2>
+        <p>New arrivals, restocks, and the occasional behind-the-scenes note — once a month, no spam.</p>
+        <form onsubmit="event.preventDefault(); this.querySelector('button').textContent='Subscribed ✓';">
+          <label class="sr-only" for="email" style="position:absolute;left:-9999px;">Email</label>
+          <input id="email" type="email" required placeholder="you@example.com" />
+          <button type="submit" class="btn btn-primary">Subscribe</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Footer ===== -->
+  <footer>
+    <div class="container foot">
+      <span>© 2025 Northwind Goods · Made in Portland, OR</span>
+      <div class="links">
+        <a href="#">Shipping</a>
+        <a href="#">Returns</a>
+        <a href="#">Privacy</a>
+        <a href="#">Contact</a>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // Tiny cart counter — purely UI demo
+    let count = 0;
+    const cartBtn = document.querySelector('.cart-btn');
+    document.querySelectorAll('.add').forEach(btn => {
+      btn.addEventListener('click', () => {
+        count += 1;
+        cartBtn.textContent = `🛒 Cart (${count})`;
+        btn.textContent = 'Added ✓';
+        setTimeout(() => (btn.textContent = 'Add to cart'), 1200);
+      });
+    });
+  </script>
+</body>
+</html>
