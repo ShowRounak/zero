@@ -25,7 +25,18 @@ func MutationTargets(workspaceRoot string, name string, args map[string]any) []s
 		if err != nil {
 			return nil
 		}
-		paths := changedFilesFromPatch(patch)
+		// Mirror apply_patch's cwd handling so the returned targets are
+		// WORKSPACE-relative (cwd-prefixed) when cwd != ".". Without this, a
+		// patch applied under a subdir would snapshot the wrong rewind path.
+		cwd, err := stringArg(args, "cwd", ".", false)
+		if err != nil {
+			return nil
+		}
+		_, relativeRoot, err := resolveWorkspacePath(workspaceRoot, cwd)
+		if err != nil {
+			return nil
+		}
+		paths := changedFilesFromPatch(relativeRoot, patch)
 		if len(paths) == 0 {
 			return nil
 		}

@@ -81,6 +81,47 @@ func TestAliasedStringArgEmptySemantics(t *testing.T) {
 	}
 }
 
+func TestAliasedStringArgAllowEmptySkipsEmptyPrimaryForPopulatedAlias(t *testing.T) {
+	// allowEmpty=true: an empty PRIMARY value must NOT mask a populated alias.
+	// {"content":"","text":"hi"} -> "hi" (write_file content/text data loss).
+	got, err := aliasedStringArg(map[string]any{"content": "", "text": "hi"}, []string{"content", "contents", "text", "body", "data", "file_content"}, "", true, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "hi" {
+		t.Fatalf("expected populated alias to win over empty primary, got %q", got)
+	}
+
+	// {"path":"","file":"x"} -> "x" (list_directory/glob wrong dir).
+	got, err = aliasedStringArg(map[string]any{"path": "", "file": "x"}, []string{"path", "file", "file_path"}, ".", false, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "x" {
+		t.Fatalf("expected populated alias to win over empty primary, got %q", got)
+	}
+
+	// allowEmpty=true: when EVERY key is present-but-empty, return "" (preserving
+	// the existing empty-string-preserved contract, NOT the fallback).
+	got, err = aliasedStringArg(map[string]any{"path": "", "file": ""}, []string{"path", "file"}, "fallback", false, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("expected empty when all keys empty, got %q", got)
+	}
+
+	// allowEmpty=true, required=true: all keys present-but-empty still returns ""
+	// (must not regress TestAliasedStringArgEmptySemantics).
+	got, err = aliasedStringArg(map[string]any{"path": ""}, []string{"path"}, "fallback", true, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("expected empty preserved for sole empty key, got %q", got)
+	}
+}
+
 func TestCoerceStringSliceShapes(t *testing.T) {
 	// []string passes through.
 	if got := coerceStringSlice([]string{"a", "b"}); len(got) != 2 || got[0] != "a" || got[1] != "b" {

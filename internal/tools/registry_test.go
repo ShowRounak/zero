@@ -93,6 +93,55 @@ func TestRegistryWithoutReturnsFilteredRegistry(t *testing.T) {
 	}
 }
 
+// Finding 5: a sub-agent's child registry (built via Without) must get an
+// ISOLATED update_plan instance, so the sub-agent's plan calls do NOT clobber
+// the parent's plan.
+func TestRegistryWithoutIsolatesUpdatePlan(t *testing.T) {
+	parentPlan := NewUpdatePlanTool()
+	registry := NewRegistry()
+	registry.Register(parentPlan)
+
+	// Parent records a plan.
+	if res := registry.Run(context.Background(), "update_plan", map[string]any{
+		"plan": []any{map[string]any{"content": "parent step"}},
+	}); res.Status != StatusOK {
+		t.Fatalf("parent update_plan failed: %s", res.Output)
+	}
+
+	child := registry.Without("task", "ask_user")
+	childTool, ok := child.Get("update_plan")
+	if !ok {
+		t.Fatalf("child registry must still expose update_plan")
+	}
+	// The child must NOT be the same instance as the parent's.
+	if childTool == Tool(parentPlan) {
+		t.Fatalf("child update_plan must be an isolated instance, got the parent's")
+	}
+
+	// Sub-agent records its own (different) plan.
+	if res := child.Run(context.Background(), "update_plan", map[string]any{
+		"plan": []any{map[string]any{"content": "child step"}},
+	}); res.Status != StatusOK {
+		t.Fatalf("child update_plan failed: %s", res.Output)
+	}
+
+	// Parent's plan must be untouched.
+	parentItems := parentPlan.CurrentPlan()
+	if len(parentItems) != 1 || parentItems[0].Content != "parent step" {
+		t.Fatalf("parent plan clobbered by sub-agent: %+v", parentItems)
+	}
+
+	// Child's own plan reflects the child step.
+	childReader, ok := childTool.(*updatePlanTool)
+	if !ok {
+		t.Fatalf("child update_plan has unexpected type %T", childTool)
+	}
+	childItems := childReader.CurrentPlan()
+	if len(childItems) != 1 || childItems[0].Content != "child step" {
+		t.Fatalf("child plan = %+v, want [child step]", childItems)
+	}
+}
+
 func TestRegistryWithoutIgnoresUnknownNames(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(NewReadFileTool(t.TempDir()))

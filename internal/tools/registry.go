@@ -48,6 +48,12 @@ func (registry *Registry) All() []Tool {
 // The original registry is left untouched. This is used to scope down a child
 // run's toolset (e.g. a sub-agent must not see "task" or "ask_user"), without
 // mutating the parent's registry. Unknown names are silently ignored.
+//
+// Because Without is exclusively the sub-agent scope-down path, any STATEFUL tool
+// the child shares with the parent is isolated here: update_plan carries mutable
+// per-run plan state, so the child gets a FRESH *updatePlanTool instance. Without
+// this, a sub-agent's update_plan calls would clobber the parent's plan (they
+// would write the same struct). Stateless tools are shared by reference as before.
 func (registry *Registry) Without(names ...string) *Registry {
 	excluded := make(map[string]struct{}, len(names))
 	for _, name := range names {
@@ -58,9 +64,20 @@ func (registry *Registry) Without(names ...string) *Registry {
 		if _, drop := excluded[name]; drop {
 			continue
 		}
-		filtered.tools[name] = tool
+		filtered.tools[name] = isolateForChild(tool)
 	}
 	return filtered
+}
+
+// isolateForChild returns a child-safe copy of a tool: stateful tools whose
+// in-memory state must not be shared between a parent run and its sub-agent are
+// replaced with a fresh instance; all other tools are returned unchanged. Only
+// update_plan currently holds mutable per-run state.
+func isolateForChild(tool Tool) Tool {
+	if _, ok := tool.(*updatePlanTool); ok {
+		return NewUpdatePlanTool()
+	}
+	return tool
 }
 
 func (registry *Registry) Run(ctx context.Context, name string, args map[string]any) Result {

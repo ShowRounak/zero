@@ -88,23 +88,33 @@ func (tool applyPatchTool) Run(ctx context.Context, args map[string]any) Result 
 		summary = "Patch applied successfully in " + relativeRoot + "."
 	}
 	result := okResult(summary)
-	result.ChangedFiles = changedFilesFromPatch(patch)
+	result.ChangedFiles = changedFilesFromPatch(relativeRoot, patch)
 	result.Display = Display{Summary: summary, Kind: "diff"}
 	return result
 }
 
-// changedFilesFromPatch extracts the unique, workspace-relative paths a patch
-// touches, reusing the same per-line parser used for validation.
-func changedFilesFromPatch(patch string) []string {
+// changedFilesFromPatch extracts the unique, WORKSPACE-relative paths a patch
+// touches, reusing the same per-line parser used for validation. Patch paths are
+// relative to the apply cwd, so relativeRoot (the workspace-relative cwd, e.g.
+// "sub/dir", or "." for the workspace root) is prefixed so callers get true
+// workspace-relative paths regardless of cwd.
+func changedFilesFromPatch(relativeRoot string, patch string) []string {
 	seen := map[string]bool{}
 	var paths []string
 	for _, line := range strings.Split(strings.ReplaceAll(patch, "\r\n", "\n"), "\n") {
 		for _, path := range patchPathsFromLine(line) {
-			if path == "" || path == "/dev/null" || seen[path] {
+			if path == "" || path == "/dev/null" {
 				continue
 			}
-			seen[path] = true
-			paths = append(paths, path)
+			workspacePath := path
+			if relativeRoot != "" && relativeRoot != "." {
+				workspacePath = filepath.ToSlash(filepath.Join(relativeRoot, path))
+			}
+			if seen[workspacePath] {
+				continue
+			}
+			seen[workspacePath] = true
+			paths = append(paths, workspacePath)
 		}
 	}
 	return paths

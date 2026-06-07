@@ -26,12 +26,20 @@ import (
 //   - allowEmpty controls whether an empty string is accepted (when false, a
 //     present empty string errors "<primaryKey> must be a non-empty string").
 //
+// When allowEmpty=true, an empty-string value under one key does NOT mask a
+// populated value under a later alias: the scan skips empty values so a populated
+// alias wins (e.g. {"content":"","text":"hi"} -> "hi"). Only when EVERY present
+// key is empty does it return "" (empty preserved), and only when every key is
+// absent does it fall back / error required. Type errors (present-but-non-string)
+// still fire eagerly regardless of emptiness.
+//
 // keys must be non-empty; keys[0] is the canonical/primary key used in errors.
 func aliasedStringArg(args map[string]any, keys []string, fallback string, required bool, allowEmpty bool) (string, error) {
 	primary := ""
 	if len(keys) > 0 {
 		primary = keys[0]
 	}
+	sawPresentKey := false
 	for _, key := range keys {
 		value, ok := args[key]
 		if !ok || value == nil {
@@ -41,10 +49,21 @@ func aliasedStringArg(args map[string]any, keys []string, fallback string, requi
 		if !ok {
 			return "", fmt.Errorf("%s must be a string", primary)
 		}
-		if !allowEmpty && text == "" {
-			return "", fmt.Errorf("%s must be a non-empty string", primary)
+		if text == "" {
+			if !allowEmpty {
+				return "", fmt.Errorf("%s must be a non-empty string", primary)
+			}
+			// allowEmpty: don't let an empty value under one key mask a populated
+			// alias under a later key. Remember it was present and keep scanning.
+			sawPresentKey = true
+			continue
 		}
 		return text, nil
+	}
+	// No populated value found. If a key was present-but-empty (allowEmpty path),
+	// preserve the empty string rather than falling back / erroring required.
+	if sawPresentKey {
+		return "", nil
 	}
 	if required {
 		return "", fmt.Errorf("%s is required", primary)

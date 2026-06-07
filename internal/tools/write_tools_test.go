@@ -385,6 +385,29 @@ func TestApplyPatchToolRejectsOutsideWorkspace(t *testing.T) {
 	}
 }
 
+// Finding 3: apply_patch with cwd != "." must report WORKSPACE-relative
+// ChangedFiles (cwd-prefixed), not cwd-relative paths. Otherwise the session's
+// rewind/diff layer keys off the wrong path.
+func TestApplyPatchReportsWorkspaceRelativeChangedFilesUnderCwd(t *testing.T) {
+	root := t.TempDir()
+	subdir := filepath.Join(root, "sub", "dir")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subdir, "a.txt"), []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	patch := "--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-one\n+two\n"
+
+	res := NewApplyPatchTool(root).Run(context.Background(), map[string]any{"patch": patch, "cwd": "sub/dir"})
+	if res.Status != StatusOK {
+		t.Skipf("git apply unavailable or failed: %s", res.Output)
+	}
+	if len(res.ChangedFiles) != 1 || res.ChangedFiles[0] != "sub/dir/a.txt" {
+		t.Fatalf("ChangedFiles = %v, want [sub/dir/a.txt]", res.ChangedFiles)
+	}
+}
+
 func TestWriteFileReportsChangedFileAndDisplay(t *testing.T) {
 	root := t.TempDir()
 	res := NewWriteFileTool(root).Run(context.Background(), map[string]any{"path": "notes.txt", "content": "hello"})

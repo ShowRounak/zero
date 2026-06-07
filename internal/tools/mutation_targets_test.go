@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -53,6 +55,37 @@ func TestMutationTargetsRejectsEscapingPaths(t *testing.T) {
 	root := t.TempDir()
 	if got := MutationTargets(root, "write_file", map[string]any{"path": "../escape.txt", "content": "x"}); len(got) != 0 {
 		t.Errorf("expected no targets for escaping path, got %v", got)
+	}
+}
+
+// Finding 3: with cwd != ".", apply_patch's MutationTargets must return
+// WORKSPACE-relative paths (cwd-prefixed), not paths relative to the patch cwd —
+// otherwise /rewind snapshots the wrong (workspace-root-relative) path.
+func TestMutationTargetsApplyPatchPrefixesCwd(t *testing.T) {
+	root := t.TempDir()
+	// cwd must exist for the patch to be applicable; MutationTargets resolves it
+	// the same way apply_patch does (resolveWorkspacePath -> EvalSymlinks).
+	if err := os.MkdirAll(filepath.Join(root, "sub", "dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	patch := "--- a/d.txt\n+++ b/d.txt\n@@ -1 +1 @@\n-x\n+y\n"
+
+	got := MutationTargets(root, "apply_patch", map[string]any{"patch": patch, "cwd": "sub/dir"})
+	want := []string{"sub/dir/d.txt"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+
+	// cwd "." (the default) must keep paths unprefixed.
+	got = MutationTargets(root, "apply_patch", map[string]any{"patch": patch, "cwd": "."})
+	if !reflect.DeepEqual(got, []string{"d.txt"}) {
+		t.Fatalf("cwd=.: got %v, want [d.txt]", got)
+	}
+
+	// Absent cwd behaves like ".".
+	got = MutationTargets(root, "apply_patch", map[string]any{"patch": patch})
+	if !reflect.DeepEqual(got, []string{"d.txt"}) {
+		t.Fatalf("no cwd: got %v, want [d.txt]", got)
 	}
 }
 
