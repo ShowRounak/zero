@@ -127,17 +127,22 @@ func DetectInteractiveCommand(command string, goos string) InteractiveCommandRes
 	}
 
 	normalized := normalizeWhitespace(command)
-	lowered := strings.ToLower(normalized)
 
 	// Multi-word interactive invocations (flags/subcommands) take priority so
-	// the more specific message wins.
-	for _, segment := range interactiveSegments {
-		if strings.Contains(lowered, segment.match) {
-			return InteractiveCommandResult{
-				Interactive: true,
-				Command:     segment.command,
-				Reason:      segment.reason,
-				Suggestion:  segment.suggestion,
+	// the more specific message wins. Match only at a real command boundary —
+	// the start of a shell segment (after leading env-assignments and wrapper
+	// prefixes) — so the segment text appearing inside a quoted argument (e.g.
+	// `echo "git rebase -i ..."`) is NOT a false positive.
+	for _, segment := range splitShellSegments(normalized) {
+		body := strings.ToLower(commandBody(strings.Fields(segment)))
+		for _, seg := range interactiveSegments {
+			if body == seg.match || strings.HasPrefix(body, seg.match+" ") {
+				return InteractiveCommandResult{
+					Interactive: true,
+					Command:     seg.command,
+					Reason:      seg.reason,
+					Suggestion:  seg.suggestion,
+				}
 			}
 		}
 	}
@@ -229,6 +234,36 @@ func firstProgram(fields []string) string {
 	return ""
 }
 
+// commandBody returns the segment's command portion with leading
+// environment-variable assignments (FOO=bar) and wrapper prefixes (sudo, env,
+// nice, timeout, ...) and their consumed option values removed, joined back
+// into a string. It lets interactive-segment matching anchor on the real
+// command boundary (e.g. `sudo git rebase -i` -> "git rebase -i") instead of
+// matching the segment text anywhere as a raw substring.
+func commandBody(fields []string) string {
+	for index := 0; index < len(fields); index++ {
+		field := fields[index]
+		if strings.Contains(field, "=") && !strings.HasPrefix(field, "=") {
+			continue
+		}
+		if strings.HasPrefix(field, "-") {
+			if wrapperValueOptions[field] && index+1 < len(fields) {
+				index++
+			}
+			continue
+		}
+		if isNumericToken(field) {
+			continue
+		}
+		if wrapperPrograms[normalizeProgramToken(field)] {
+			continue
+		}
+		// First real command token: the body starts here.
+		return strings.Join(fields[index:], " ")
+	}
+	return ""
+}
+
 // isNumericToken reports whether a token is purely digits (e.g. the duration
 // argument of `timeout 5`), so wrapper-argument scanning can skip it.
 func isNumericToken(field string) bool {
@@ -270,20 +305,38 @@ func shellDashCPayload(program string, fields []string) string {
 }
 
 // normalizeProgramToken reduces a raw command token to a bare, lowercased program
-// name: it strips surrounding quotes and shell-substitution characters, removes
-// any directory prefix (so /usr/bin/vim and C:\tools\vim.exe match "vim"), and
-// lowercases. This closes path/quote/substitution evasions of the detector.
+// name: it strips shell quoting/escaping characters (", ', `, \) wherever they
+// appear in the token (including embedded ones like `vi\m` or `v"i"m`), strips
+// leading command-substitution markers, removes any directory prefix (so
+// /usr/bin/vim and C:\tools\vim.exe match "vim"), and lowercases. This closes
+// path/quote/substitution evasions of the detector.
 func normalizeProgramToken(field string) string {
-	const left = "$('\"" + "`"
-	const right = ")'\"" + "`"
 	token := strings.TrimSpace(field)
-	token = strings.TrimLeft(token, left)
-	token = strings.TrimRight(token, right)
-	token = strings.TrimPrefix(token, "\\")
-	if i := strings.LastIndexAny(token, "/\\"); i >= 0 {
+	token = strings.TrimLeft(token, "$(")
+	token = strings.TrimRight(token, ")")
+	// Strip shell quoting/escaping characters (", ', `, \) wherever they appear
+	// in the token — surrounding, embedded, or as a mid-word escape — so
+	// "vim", v"i"m, 'v'im, and vi\m all collapse to the program name. This is
+	// done BEFORE the directory-prefix trim so an escape can't masquerade as a
+	// path separator (e.g. vi\m must become vim, not m).
+	token = stripChars(token, "\"'`\\")
+	// Strip a directory prefix so /usr/bin/vim reduces to the basename. (A
+	// Windows-style backslash path separator is already removed above, so only
+	// the POSIX separator remains to split on.)
+	if i := strings.LastIndex(token, "/"); i >= 0 {
 		token = token[i+1:]
 	}
 	return strings.ToLower(token)
+}
+
+// stripChars returns s with every rune in cutset removed.
+func stripChars(s, cutset string) string {
+	return strings.Map(func(r rune) rune {
+		if strings.ContainsRune(cutset, r) {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // hasNonInteractiveFlag reports whether a REPL-style program was invoked in a

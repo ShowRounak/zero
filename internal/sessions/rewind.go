@@ -36,7 +36,14 @@ func (store *Store) RestoreToSequence(sessionID, workspaceRoot string, targetSeq
 		return report, err
 	}
 	defer unlock()
+	return store.restoreToSequenceLocked(sessionID, workspaceRoot, targetSeq)
+}
 
+// restoreToSequenceLocked is the body of RestoreToSequence WITHOUT acquiring the
+// session lock. The caller MUST already hold store.lockSession(sessionID). It
+// lets ApplyRewind run restore/truncate/prune/marker atomically under one lock.
+func (store *Store) restoreToSequenceLocked(sessionID, workspaceRoot string, targetSeq int) (RestoreReport, error) {
+	report := RestoreReport{TargetSequence: targetSeq}
 	checkpoints, err := store.sortedCheckpointsAfter(sessionID, targetSeq)
 	if err != nil {
 		return report, err
@@ -86,7 +93,7 @@ func (store *Store) RestoreToSequence(sessionID, workspaceRoot string, targetSeq
 					report.Skipped = append(report.Skipped, f.Path)
 					continue
 				}
-				if err := store.writeFileAtomic(abs, content); err != nil {
+				if err := store.writeFileAtomic(abs, content, f.Mode); err != nil {
 					report.Skipped = append(report.Skipped, f.Path)
 					continue
 				}
@@ -160,7 +167,12 @@ func (store *Store) TruncateEvents(sessionID string, keepThroughSequence int) er
 		return err
 	}
 	defer unlock()
+	return store.truncateEventsLocked(sessionID, keepThroughSequence)
+}
 
+// truncateEventsLocked is the body of TruncateEvents WITHOUT acquiring the
+// session lock. The caller MUST already hold store.lockSession(sessionID).
+func (store *Store) truncateEventsLocked(sessionID string, keepThroughSequence int) error {
 	events, err := store.ReadEvents(sessionID)
 	if err != nil {
 		return err
@@ -204,15 +216,28 @@ func (store *Store) TruncateEvents(sessionID string, keepThroughSequence int) er
 // truncate the event log, prune now-orphaned blobs, and append an EventSessionRewind
 // marker. Returns the restore report.
 func (store *Store) ApplyRewind(sessionID, workspaceRoot string, targetSeq int) (RestoreReport, error) {
-	report, err := store.RestoreToSequence(sessionID, workspaceRoot, targetSeq)
+	if !ValidSessionID(sessionID) {
+		return RestoreReport{TargetSequence: targetSeq}, fmt.Errorf("invalid zero session id %q", sessionID)
+	}
+	// Hold the session lock ONCE across restore + truncate + prune + marker so a
+	// concurrent writer cannot interleave between the sub-steps. The sub-steps
+	// use *Locked variants that assume the lock is already held; re-locking here
+	// would deadlock the non-reentrant in-process mutex.
+	unlock, err := store.lockSession(sessionID)
+	if err != nil {
+		return RestoreReport{TargetSequence: targetSeq}, err
+	}
+	defer unlock()
+
+	report, err := store.restoreToSequenceLocked(sessionID, workspaceRoot, targetSeq)
 	if err != nil {
 		return report, err
 	}
-	if err := store.TruncateEvents(sessionID, targetSeq); err != nil {
+	if err := store.truncateEventsLocked(sessionID, targetSeq); err != nil {
 		return report, err
 	}
-	_, _ = store.pruneOrphanBlobs(sessionID)
-	if _, err := store.AppendEvent(sessionID, AppendEventInput{
+	_, _ = store.pruneOrphanBlobsLocked(sessionID)
+	if _, err := store.appendEventLocked(sessionID, AppendEventInput{
 		Type:    EventSessionRewind,
 		Payload: RewindMarker{TargetSequence: targetSeq, Report: report},
 	}); err != nil {
@@ -221,12 +246,29 @@ func (store *Store) ApplyRewind(sessionID, workspaceRoot string, targetSeq int) 
 	return report, nil
 }
 
-func (store *Store) writeFileAtomic(path string, content []byte) error {
+// writeFileAtomic writes content to path via a temp file + rename. mode is the
+// checkpoint-recorded permission bits to restore; when it is 0 (mode unknown —
+// e.g. an old checkpoint without the field) the original mode of the file being
+// overwritten is preserved, falling back to 0o644 for a newly created file.
+func (store *Store) writeFileAtomic(path string, content []byte, mode uint32) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
+	perm := os.FileMode(0o644)
+	if mode != 0 {
+		perm = os.FileMode(mode).Perm()
+	} else if info, err := os.Stat(path); err == nil {
+		// Mode not captured: preserve the existing file's permission bits.
+		perm = info.Mode().Perm()
+	}
 	tmp := fmt.Sprintf("%s.zero-restore-tmp-%d", path, store.idCounter.Add(1))
-	if err := os.WriteFile(tmp, content, 0o644); err != nil {
+	if err := os.WriteFile(tmp, content, perm); err != nil {
+		return err
+	}
+	// WriteFile only applies perm on creation and is subject to umask; force the
+	// exact bits so an executable script's mode is faithfully restored.
+	if err := os.Chmod(tmp, perm); err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {

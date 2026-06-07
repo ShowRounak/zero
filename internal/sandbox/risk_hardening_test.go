@@ -126,3 +126,50 @@ func TestClassifyFlagsChmodAndRmFlagVariants(t *testing.T) {
 		}
 	}
 }
+
+// Audit finding (HIGH): a quoted root target must not bypass the destructive
+// deny gate. `rm -rf "/"` / `rm -rf '/'` were previously not matched because
+// only a bare `/` (unquoted) was recognized.
+func TestClassifyFlagsRmRfQuotedRoot(t *testing.T) {
+	for _, command := range []string{
+		`rm -rf "/"`,
+		`rm -rf '/'`,
+		`rm -rf /`, // already worked; guard against regression
+		`rm -rf "$HOME"`,
+		`rm -rf "~"`,
+		`rm -rf '*'`,
+	} {
+		risk := classifyCommand(command)
+		if risk.Level != RiskCritical || !HasRiskCategory(risk, "destructive") {
+			t.Fatalf("Classify(%q) = %#v, want critical destructive", command, risk)
+		}
+	}
+}
+
+// Audit finding (LOW): a single-file `chmod 777 <file>` must NOT be classified
+// destructive — the intent is recursive/directory-tree chmod. Recursive and
+// absolute-path/sensitive-tree chmods must remain flagged.
+func TestClassifyChmod777SingleFileNotDestructive(t *testing.T) {
+	for _, command := range []string{
+		"chmod 777 myscript.sh",
+		"chmod 0777 build/output.bin",
+		"chmod 777 ./run",
+	} {
+		risk := classifyCommand(command)
+		if HasRiskCategory(risk, "destructive") {
+			t.Fatalf("single-file chmod 777 should not be destructive: Classify(%q) = %#v", command, risk)
+		}
+	}
+	// Still-destructive forms must remain flagged.
+	for _, command := range []string{
+		"chmod -R 777 /",
+		"chmod 777 /etc",
+		"chmod 777 -R /etc",
+		"chmod -Rf 777 /",
+	} {
+		risk := classifyCommand(command)
+		if !HasRiskCategory(risk, "destructive") {
+			t.Fatalf("recursive/abs chmod 777 must stay destructive: Classify(%q) = %#v", command, risk)
+		}
+	}
+}

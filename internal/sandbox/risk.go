@@ -13,11 +13,15 @@ var (
 	// destructiveCommandPattern matches the highest-risk shell forms:
 	//   - rm -rf (with combined/reordered r/f flags) targeting /, $HOME (bare,
 	//     quoted, or ${HOME} braced), ~, or *, with an optional `--` before the
-	//     target.
+	//     target. Each target alternative tolerates optional surrounding quotes
+	//     so `rm -rf "/"` / `rm -rf '/'` cannot slip past the gate.
 	//   - chmod with combined/reordered flags and an octal-or-777 mode applied
-	//     to a directory tree (e.g. chmod -Rf 777 /, chmod -R 0777 /, chmod 777 -R /etc).
+	//     RECURSIVELY (a -R/-r flag) or to an ABSOLUTE path / sensitive tree
+	//     (e.g. chmod -Rf 777 /, chmod -R 0777 /, chmod 777 -R /etc, chmod 777 /etc).
+	//     A single-file chmod 777 (e.g. `chmod 777 script.sh`) is intentionally
+	//     NOT flagged — the intent is recursive/directory-tree chmod.
 	//   - mkfs, dd if=, chown -R.
-	destructiveCommandPattern = regexp.MustCompile(`(?i)(\brm\s+(-[A-Za-z]*r[A-Za-z]*f|-rf|-fr)\s+(--\s+)?(["']?\$\{?HOME\}?["']?|/|~|\*)|\bmkfs\b|\bdd\s+if=|\bchmod\s+(-\S+\s+)*0?777\b|\bchmod\s+0?777\s+-[A-Za-z]*\b|\bchown\s+-R\b)`)
+	destructiveCommandPattern = regexp.MustCompile(`(?i)(\brm\s+(-[A-Za-z]*r[A-Za-z]*f|-rf|-fr)\s+(--\s+)?["']?(\$\{?HOME\}?|/|~|\*)["']?|\bmkfs\b|\bdd\s+if=|\bchmod\s+(-[A-Za-z]*[rR][A-Za-z]*\s+)+0?777\b|\bchmod\s+(-\S+\s+)*0?777\s+-[A-Za-z]*[rR][A-Za-z]*\b|\bchmod\s+(-\S+\s+)*0?777\s+["']?/|\bchown\s+-R\b)`)
 	// pipedInstallerPattern matches a pipe into a POSIX shell, with or without a
 	// space and across sh/bash/zsh/ksh/dash (so `curl x|sh`, `|bash`, `| zsh`).
 	pipedInstallerPattern = regexp.MustCompile(`(?i)\|\s*(ba|z|k|da)?sh\b`)

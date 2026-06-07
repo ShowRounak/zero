@@ -23,6 +23,7 @@ type CheckpointFile struct {
 	Absent  bool   `json:"absent,omitempty"`  // file did not exist before (restore -> delete)
 	Skipped bool   `json:"skipped,omitempty"` // exceeded size cap; not recoverable
 	Bytes   int    `json:"bytes,omitempty"`
+	Mode    uint32 `json:"mode,omitempty"` // unix permission bits of the prior file; 0 if unknown (restore preserves existing mode)
 }
 
 // CheckpointPayload is the payload of an EventSessionCheckpoint event. It indexes
@@ -60,11 +61,26 @@ func (store *Store) blobPath(sessionID, hash string) string {
 // best-effort: an unreadable file is recorded as skipped rather than failing the
 // caller. Returns the appended event (or a zero Event if there was nothing to do).
 func (store *Store) CaptureToolCheckpoint(sessionID, workspaceRoot, tool string, paths []string) (Event, error) {
+	if !ValidSessionID(sessionID) {
+		return Event{}, fmt.Errorf("invalid zero session id %q", sessionID)
+	}
+	if !CheckpointsEnabled() || len(paths) == 0 {
+		return Event{}, nil
+	}
+	// Hold the session lock across writing the blobs AND appending the
+	// referencing event so a concurrent pruneOrphanBlobs cannot delete a blob in
+	// the gap between writeBlob and the event that references it.
+	unlock, err := store.lockSession(sessionID)
+	if err != nil {
+		return Event{}, err
+	}
+	defer unlock()
+
 	payload, ok := store.SnapshotForCheckpoint(sessionID, workspaceRoot, tool, paths)
 	if !ok {
 		return Event{}, nil
 	}
-	return store.AppendEvent(sessionID, AppendEventInput{Type: EventSessionCheckpoint, Payload: payload})
+	return store.appendEventLocked(sessionID, AppendEventInput{Type: EventSessionCheckpoint, Payload: payload})
 }
 
 // SnapshotForCheckpoint reads and stores the before-mutation blobs for paths and
@@ -76,7 +92,7 @@ func (store *Store) SnapshotForCheckpoint(sessionID, workspaceRoot, tool string,
 	if !CheckpointsEnabled() || len(paths) == 0 {
 		return CheckpointPayload{}, false
 	}
-	capBytes := maxCheckpointBytes()
+	capBytes := int64(maxCheckpointBytes())
 	files := make([]CheckpointFile, 0, len(paths))
 	for _, rel := range paths {
 		entry := CheckpointFile{Path: rel}
@@ -91,12 +107,19 @@ func (store *Store) SnapshotForCheckpoint(sessionID, workspaceRoot, tool string,
 		if info.IsDir() {
 			continue
 		}
-		if int(info.Size()) > capBytes {
+		// Compare sizes as int64 so a file larger than the cap is never silently
+		// truncated past the cap via an int overflow on a 32-bit platform.
+		if info.Size() > capBytes {
 			entry.Skipped = true
-			entry.Bytes = int(info.Size())
+			if info.Size() <= int64(^uint(0)>>1) {
+				entry.Bytes = int(info.Size())
+			}
 			files = append(files, entry)
 			continue
 		}
+		// Record the prior permission bits so a restore can put them back (an
+		// executable script must not return as 0o644).
+		entry.Mode = uint32(info.Mode().Perm())
 		content, readErr := os.ReadFile(abs)
 		if readErr != nil {
 			entry.Skipped = true
@@ -143,6 +166,52 @@ func (store *Store) writeBlob(sessionID string, content []byte) (string, error) 
 	return hash, nil
 }
 
+// copyBlobs copies every checkpoint blob from src into dst's blobs dir. It is
+// used by Fork so a forked session carries the parent's content-addressed blobs
+// and a rewind on the fork can restore file content. Blobs are content-addressed
+// (the filename is the sha256), so an already-present blob is left untouched.
+// A missing source blobs dir is not an error (the session had no checkpoints).
+func (store *Store) copyBlobs(srcSessionID, dstSessionID string) error {
+	srcDir := store.blobsDir(srcSessionID)
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read checkpoint blobs: %w", err)
+	}
+	dstDir := store.blobsDir(dstSessionID)
+	madeDir := false
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		dstPath := store.blobPath(dstSessionID, entry.Name())
+		if _, err := os.Stat(dstPath); err == nil {
+			continue // content-addressed: identical blob already present
+		}
+		content, err := os.ReadFile(store.blobPath(srcSessionID, entry.Name()))
+		if err != nil {
+			return fmt.Errorf("read checkpoint blob %s: %w", entry.Name(), err)
+		}
+		if !madeDir {
+			if err := os.MkdirAll(dstDir, 0o700); err != nil {
+				return fmt.Errorf("create checkpoint blob dir: %w", err)
+			}
+			madeDir = true
+		}
+		tmp := fmt.Sprintf("%s.tmp-%d", dstPath, store.idCounter.Add(1))
+		if err := os.WriteFile(tmp, content, 0o600); err != nil {
+			return fmt.Errorf("write checkpoint blob: %w", err)
+		}
+		if err := os.Rename(tmp, dstPath); err != nil {
+			_ = os.Remove(tmp)
+			return fmt.Errorf("commit checkpoint blob: %w", err)
+		}
+	}
+	return nil
+}
+
 // readBlob returns the content stored under a hash, verifying that the content
 // still hashes to the requested sha256. A mismatch (corruption/tampering) is
 // returned as an error so the caller skips the path rather than writing
@@ -160,8 +229,28 @@ func (store *Store) readBlob(sessionID, hash string) ([]byte, error) {
 }
 
 // pruneOrphanBlobs removes blobs not referenced by any checkpoint event (e.g. after
-// a rewind discards later checkpoints). Best-effort; returns count removed.
+// a rewind discards later checkpoints). Best-effort; returns count removed. It
+// acquires the session lock so it cannot delete a blob that a concurrent
+// CaptureToolCheckpoint has just written but not yet referenced by its event.
 func (store *Store) pruneOrphanBlobs(sessionID string) (int, error) {
+	if !ValidSessionID(sessionID) {
+		return 0, fmt.Errorf("invalid zero session id %q", sessionID)
+	}
+	unlock, err := store.lockSession(sessionID)
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
+	return store.pruneOrphanBlobsLocked(sessionID)
+}
+
+// pruneOrphanBlobsLocked is the body of pruneOrphanBlobs WITHOUT acquiring the
+// session lock. The caller MUST already hold store.lockSession(sessionID).
+// Holding the lock around referencedBlobs + ReadDir + Remove is what closes the
+// race with a concurrent CaptureToolCheckpoint (which writes a blob and appends
+// the referencing event under the same lock): the prune either sees the blob
+// before it is written, or sees the event that references it — never the gap.
+func (store *Store) pruneOrphanBlobsLocked(sessionID string) (int, error) {
 	referenced, err := store.referencedBlobs(sessionID)
 	if err != nil {
 		return 0, err

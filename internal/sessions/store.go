@@ -129,9 +129,18 @@ type StoreOptions struct {
 }
 
 type Store struct {
-	RootDir      string
-	now          func() time.Time
-	locksMu      sync.Mutex
+	RootDir string
+	now     func() time.Time
+	locksMu sync.Mutex
+	// sessionLocks holds one in-process mutex per session id. Entries are never
+	// removed: doing so safely would require reference counting (a goroutine
+	// blocked on a mutex must not have it deleted and recreated out from under
+	// it, which would break mutual exclusion). The cost of leaving them is a
+	// single *sync.Mutex per distinct session id touched by this Store's
+	// lifetime, which is small and bounded in practice — the CLI process is
+	// short-lived and the TUI works with a bounded set of sessions. There is no
+	// session-close/delete lifecycle hook to prune against, so unbounded growth
+	// is accepted deliberately rather than risk an unsafe eviction.
 	sessionLocks map[string]*sync.Mutex
 	idCounter    atomic.Uint64
 }
@@ -315,6 +324,13 @@ func (store *Store) Fork(parentSessionID string, input ForkInput) (Metadata, err
 			return Metadata{}, err
 		}
 	}
+	// Copy the parent's content-addressed checkpoint blobs into the fork so the
+	// copied EventSessionCheckpoint events resolve to real blobs and a rewind on
+	// the fork can restore file content (otherwise rewind reads missing blobs
+	// and silently skips the files).
+	if err := store.copyBlobs(parent.SessionID, fork.SessionID); err != nil {
+		return Metadata{}, err
+	}
 	if _, err := store.AppendEvent(fork.SessionID, AppendEventInput{
 		Type: EventSessionFork,
 		Payload: map[string]any{
@@ -347,6 +363,15 @@ func (store *Store) AppendEvent(sessionID string, input AppendEventInput) (Event
 	}
 	defer unlock()
 
+	return store.appendEventLocked(sessionID, input)
+}
+
+// appendEventLocked appends an event WITHOUT acquiring the session lock. The
+// caller MUST already hold store.lockSession(sessionID). It exists so multi-step
+// operations (e.g. ApplyRewind) can append the trailing marker atomically under
+// the single lock they already hold, instead of re-locking (which would deadlock
+// on the non-reentrant in-process mutex).
+func (store *Store) appendEventLocked(sessionID string, input AppendEventInput) (Event, error) {
 	session, err := store.readMetadata(sessionID)
 	if err != nil {
 		return Event{}, err

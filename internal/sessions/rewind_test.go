@@ -190,6 +190,165 @@ func TestRestoreRejectsInWorkspaceSymlinkEscape(t *testing.T) {
 	}
 }
 
+// Audit finding (HIGH): Fork must copy content-addressed checkpoint blobs into
+// the fork, not just the checkpoint EVENTS. Otherwise an ApplyRewind on the
+// fork reads a blob that does not exist in the fork's blobs dir and silently
+// skips the file instead of restoring it.
+func TestForkRewindRestoresFromCopiedBlobs(t *testing.T) {
+	store := NewStore(StoreOptions{RootDir: t.TempDir()})
+	ws := t.TempDir()
+	if _, err := store.Create(CreateInput{SessionID: "parent"}); err != nil {
+		t.Fatal(err)
+	}
+	target, err := store.AppendEvent("parent", AppendEventInput{Type: EventMessage, Payload: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Capture "original" into a checkpoint, then mutate on disk.
+	path := filepath.Join(ws, "a.txt")
+	mustWriteFile(t, path, "original")
+	if _, err := store.CaptureToolCheckpoint("parent", ws, "write_file", []string{"a.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, path, "changed")
+
+	fork, err := store.Fork("parent", ForkInput{SessionID: "fork"})
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+
+	// The fork must carry the parent's blobs so rewind can read them.
+	parentBlobs, _ := os.ReadDir(store.blobsDir("parent"))
+	if len(parentBlobs) == 0 {
+		t.Fatal("precondition: parent should have at least one blob")
+	}
+	for _, b := range parentBlobs {
+		if _, err := os.Stat(store.blobPath(fork.SessionID, b.Name())); err != nil {
+			t.Fatalf("fork is missing parent blob %s: %v", b.Name(), err)
+		}
+	}
+
+	// Rewind on the fork (target seq matches the copied EventMessage) must
+	// restore "original" from the copied blob.
+	report, err := store.ApplyRewind(fork.SessionID, ws, target.Sequence)
+	if err != nil {
+		t.Fatalf("ApplyRewind on fork: %v", err)
+	}
+	if report.FilesRestored != 1 {
+		t.Fatalf("FilesRestored = %d, want 1 (blob must be present in fork)", report.FilesRestored)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "original" {
+		t.Fatalf("fork rewind did not restore from copied blob, got %q", got)
+	}
+}
+
+// Audit finding (LOW): restoring a checkpointed blob must preserve the original
+// file permission bits (an executable script must not come back as 0o644).
+func TestRestorePreservesExecutableMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix file modes do not apply on windows")
+	}
+	store, ws := newCkStore(t)
+	target, _ := store.AppendEvent("s", AppendEventInput{Type: EventMessage, Payload: map[string]any{}})
+	path := filepath.Join(ws, "run.sh")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\necho hi\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustCapture(t, store, ws, "write_file", "run.sh") // captures 0o755 content
+	// Mutate content (and clobber mode) as a tool edit would.
+	if err := os.WriteFile(path, []byte("#!/bin/sh\necho bye\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Chmod(path, 0o644)
+
+	if _, err := store.RestoreToSequence("s", ws, target.Sequence); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("restored file lost its executable bit: mode=%v", info.Mode().Perm())
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Fatalf("restored mode = %v, want 0o755", info.Mode().Perm())
+	}
+}
+
+// Audit finding (MED): ApplyRewind must hold the session lock once across all
+// sub-steps and must NOT deadlock by re-acquiring the non-reentrant mutex.
+func TestApplyRewindDoesNotDeadlock(t *testing.T) {
+	store, ws := newCkStore(t)
+	target, _ := store.AppendEvent("s", AppendEventInput{Type: EventMessage, Payload: map[string]any{}})
+	path := filepath.Join(ws, "a.txt")
+	mustWriteFile(t, path, "original")
+	mustCapture(t, store, ws, "write_file", "a.txt")
+	mustWriteFile(t, path, "changed")
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := store.ApplyRewind("s", ws, target.Sequence)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ApplyRewind: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ApplyRewind deadlocked (likely re-acquired the session lock)")
+	}
+	if got, _ := os.ReadFile(path); string(got) != "original" {
+		t.Fatalf("file not restored: %q", got)
+	}
+}
+
+// Audit findings (MED): a concurrent CaptureToolCheckpoint and pruneOrphanBlobs
+// must not race or delete a freshly-written-but-referenced blob, and must not
+// deadlock. Exercised under -race.
+func TestCaptureAndPruneConcurrent(t *testing.T) {
+	store, ws := newCkStore(t)
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		name := filepath.Join(ws, "f"+string(rune('a'+i%10))+".txt")
+		mustWriteFile(t, name, "content-"+string(rune('0'+i%10)))
+	}
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 20; i++ {
+			rel := "f" + string(rune('a'+i%10)) + ".txt"
+			if _, err := store.CaptureToolCheckpoint("s", ws, "write_file", []string{rel}); err != nil {
+				t.Errorf("CaptureToolCheckpoint: %v", err)
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 20; i++ {
+			if _, err := store.pruneOrphanBlobs("s"); err != nil {
+				t.Errorf("pruneOrphanBlobs: %v", err)
+				return
+			}
+		}
+	}()
+	wg.Wait()
+
+	// Every blob referenced by a surviving checkpoint event must still exist on
+	// disk: prune must not have deleted a blob that capture had referenced.
+	refs, err := store.referencedBlobs("s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for hash := range refs {
+		if _, err := store.readBlob("s", hash); err != nil {
+			t.Fatalf("referenced blob %s missing after concurrent prune: %v", hash, err)
+		}
+	}
+}
+
 // Finding 8: an OS-level file lock must serialize session mutations across
 // separate Store instances on the same RootDir (e.g. CLI rewind vs TUI). While
 // one Store holds the session lock, another Store's AppendEvent must block.

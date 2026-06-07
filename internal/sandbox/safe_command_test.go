@@ -125,6 +125,68 @@ func TestDetectInteractiveThroughWrappersAndShellC(t *testing.T) {
 	}
 }
 
+// Audit finding (MED): the interactive-program detector must not be bypassed by
+// quote/escape characters embedded INSIDE the program token (e.g. `vi\m`,
+// `v"i"m`, `'v'im`), not just surrounding it.
+func TestDetectInteractiveStripsEmbeddedQuotingFromToken(t *testing.T) {
+	cases := []struct {
+		name    string
+		command string
+		wantCmd string
+	}{
+		{name: "mid-token backslash", command: `vi\m file.txt`, wantCmd: "vim"},
+		{name: "embedded double quotes", command: `v"i"m file.txt`, wantCmd: "vim"},
+		{name: "leading single quote split", command: `'v'im file.txt`, wantCmd: "vim"},
+		{name: "escaped less", command: `le\ss /var/log/syslog`, wantCmd: "less"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := DetectInteractiveCommand(tc.command, "linux")
+			if !result.Interactive {
+				t.Fatalf("DetectInteractiveCommand(%q) = not interactive, want interactive", tc.command)
+			}
+			if result.Command != tc.wantCmd {
+				t.Fatalf("matched command = %q, want %q", result.Command, tc.wantCmd)
+			}
+		})
+	}
+}
+
+// Audit finding (LOW): interactive SEGMENTS (e.g. "git rebase -i", "tail -f")
+// must match only on a real command/segment boundary, not anywhere as a raw
+// substring of the whole command. Otherwise the text appearing inside a quoted
+// argument produces a false positive.
+func TestDetectInteractiveSegmentBoundary(t *testing.T) {
+	// False positives: the segment text appears only inside an argument/quotes.
+	allowed := []string{
+		`echo "git rebase -i is interactive"`,
+		`grep "tail -f" notes.txt`,
+		`echo run docker attach later`,
+		`printf 'kubectl logs -f streams'`,
+	}
+	for _, cmd := range allowed {
+		if got := DetectInteractiveCommand(cmd, "linux"); got.Interactive {
+			t.Errorf("expected %q NOT to be flagged interactive (got %q)", cmd, got.Command)
+		}
+	}
+	// True positives must still be caught at a real boundary.
+	blocked := []struct {
+		command string
+		wantCmd string
+	}{
+		{`git rebase -i HEAD~3`, "git rebase -i"},
+		{`tail -f app.log`, "tail -f"},
+		{`git pull && git rebase -i HEAD~2`, "git rebase -i"},
+		{`docker logs -f mycontainer`, "docker logs -f"},
+	}
+	for _, tc := range blocked {
+		got := DetectInteractiveCommand(tc.command, "linux")
+		if !got.Interactive || got.Command != tc.wantCmd {
+			t.Errorf("DetectInteractiveCommand(%q) = (%v,%q), want interactive %q", tc.command, got.Interactive, got.Command, tc.wantCmd)
+		}
+	}
+}
+
 func TestDetectInteractiveBypasses(t *testing.T) {
 	blocked := []string{
 		"/usr/bin/vim file.txt",       // absolute path
