@@ -1305,3 +1305,88 @@ func providerByName(t *testing.T, providers []ProviderProfile, name string) Prov
 	t.Fatalf("provider %q not found in %#v", name, providers)
 	return ProviderProfile{}
 }
+
+func TestResolveDefaultsDeferThresholdWhenUnset(t *testing.T) {
+	path := writeConfig(t, `{
+		"activeProvider": "p",
+		"providers": [{"name": "p", "provider": "openai", "apiKey": "sk", "model": "m"}]
+	}`)
+
+	resolved, err := Resolve(ResolveOptions{ProjectConfigPath: path, Env: map[string]string{}})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if resolved.Tools.DeferThreshold != defaultDeferThreshold {
+		t.Fatalf("Tools.DeferThreshold = %d, want %d", resolved.Tools.DeferThreshold, defaultDeferThreshold)
+	}
+}
+
+func TestResolveDeferThresholdFromFile(t *testing.T) {
+	path := writeConfig(t, `{
+		"activeProvider": "p",
+		"providers": [{"name": "p", "provider": "openai", "apiKey": "sk", "model": "m"}],
+		"tools": {"deferThreshold": 4}
+	}`)
+
+	resolved, err := Resolve(ResolveOptions{ProjectConfigPath: path, Env: map[string]string{}})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if resolved.Tools.DeferThreshold != 4 {
+		t.Fatalf("Tools.DeferThreshold = %d, want 4", resolved.Tools.DeferThreshold)
+	}
+}
+
+func TestResolveDeferThresholdZeroDisablesViaFile(t *testing.T) {
+	// 0 is a valid, meaningful value (disabled). It must survive Resolve and NOT
+	// be re-defaulted to 10, so a user can explicitly disable deferral.
+	path := writeConfig(t, `{
+		"activeProvider": "p",
+		"providers": [{"name": "p", "provider": "openai", "apiKey": "sk", "model": "m"}],
+		"tools": {"deferThreshold": 0}
+	}`)
+
+	resolved, err := Resolve(ResolveOptions{ProjectConfigPath: path, Env: map[string]string{}})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if resolved.Tools.DeferThreshold != 0 {
+		t.Fatalf("Tools.DeferThreshold = %d, want 0 (explicit disable preserved)", resolved.Tools.DeferThreshold)
+	}
+}
+
+func TestResolveDeferThresholdOverrideWins(t *testing.T) {
+	path := writeConfig(t, `{
+		"activeProvider": "p",
+		"providers": [{"name": "p", "provider": "openai", "apiKey": "sk", "model": "m"}],
+		"tools": {"deferThreshold": 4}
+	}`)
+
+	resolved, err := Resolve(ResolveOptions{
+		ProjectConfigPath: path,
+		Env:               map[string]string{},
+		Overrides:         Overrides{Tools: ToolsConfig{DeferThreshold: 20}},
+	})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if resolved.Tools.DeferThreshold != 20 {
+		t.Fatalf("Tools.DeferThreshold = %d, want 20 (override wins)", resolved.Tools.DeferThreshold)
+	}
+}
+
+func TestResolveRejectsNegativeDeferThreshold(t *testing.T) {
+	path := writeConfig(t, `{
+		"activeProvider": "p",
+		"providers": [{"name": "p", "provider": "openai", "apiKey": "sk", "model": "m"}],
+		"tools": {"deferThreshold": -1}
+	}`)
+
+	_, err := Resolve(ResolveOptions{ProjectConfigPath: path, Env: map[string]string{}})
+	if err == nil {
+		t.Fatal("Resolve() error = nil for negative deferThreshold, want failure")
+	}
+	if !strings.Contains(err.Error(), "tools.deferThreshold") {
+		t.Fatalf("Resolve() error = %v, want tools.deferThreshold rejection", err)
+	}
+}
