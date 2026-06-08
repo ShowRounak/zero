@@ -417,6 +417,7 @@ func executeToolCall(ctx context.Context, registry *tools.Registry, call ToolCal
 		Redacted:     result.Redacted,
 		ChangedFiles: result.ChangedFiles,
 		Display:      result.Display,
+		LoadedTools:  loadedToolsFromResult(result.Meta),
 	}, nil
 }
 
@@ -935,6 +936,25 @@ func stopReasonFromToolResult(result ToolResult) StopReason {
 		return StopReasonSpecReviewRequired
 	}
 	return ""
+}
+
+// loadedToolsFromResult extracts the deferred-tool names a tool (tool_search)
+// asked the loop to expose next turn from Meta["load_tools"] (comma-separated).
+// It trims each name and drops empties; returns nil when the key is absent or
+// yields no names, so an ordinary result keeps a nil LoadedTools. Mirrors the
+// Meta-driven control signal read by stopReasonFromToolResult.
+func loadedToolsFromResult(meta map[string]string) []string {
+	raw := meta["load_tools"]
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var names []string
+	for _, part := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			names = append(names, trimmed)
+		}
+	}
+	return names
 }
 
 // appendAbortedToolResults adds a placeholder tool-result message for each of
