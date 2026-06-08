@@ -171,6 +171,32 @@ func TestRegisterToolsPreservesPriorRegistryStateOnFailure(t *testing.T) {
 	}
 }
 
+func TestRegistryToolIsDeferredEligible(t *testing.T) {
+	client := &fakeToolClient{}
+	tool := newRegistryTool(
+		Server{Name: "docs", Type: "stdio"},
+		RemoteTool{Name: "lookup", Description: "Lookup documentation"},
+		client,
+		RegisterOptions{},
+	)
+
+	// Sanity: the wrapper synthesizes the expected sanitized name so the test
+	// exercises the real production path, not a hand-built struct.
+	if tool.Name() != "mcp_docs_lookup" {
+		t.Fatalf("registryTool.Name() = %q, want mcp_docs_lookup", tool.Name())
+	}
+
+	if !tool.Deferred() {
+		t.Fatal("registryTool.Deferred() = false, want true (all MCP tools are deferred-eligible)")
+	}
+
+	// The exported helper in the tools package must agree via the optional
+	// interface, since the agent loop partitions tools through tools.IsDeferred.
+	if !tools.IsDeferred(tool) {
+		t.Fatal("tools.IsDeferred(registryTool) = false, want true")
+	}
+}
+
 type fakePreexistingTool struct {
 	name string
 }

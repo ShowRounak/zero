@@ -156,6 +156,14 @@ func (tool registryTool) Safety() tools.Safety {
 	return tool.safety
 }
 
+// Deferred marks every MCP tool as deferred-eligible: when many MCP tools are
+// registered the agent loop may withhold their full schema and advertise them
+// via tool_search. Built-in tools do not implement this interface and stay
+// eager.
+func (tool registryTool) Deferred() bool {
+	return true
+}
+
 func (tool registryTool) Run(ctx context.Context, args map[string]any) tools.Result {
 	result, err := tool.client.CallTool(ctx, tool.remote.Name, args)
 	if err != nil {
