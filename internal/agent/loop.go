@@ -363,7 +363,13 @@ func executeToolCall(ctx context.Context, registry *tools.Registry, call ToolCal
 			}, nil
 		}
 	}
-	if !ToolAllowedByFilters(call.Name, options.EnabledTools, options.DisabledTools) {
+	// tool_search is the gateway to the allowlisted deferred tools, so a non-empty
+	// EnabledTools allowlist that omits it must NOT reject the call — otherwise the
+	// reminder points the model at a tool the dispatch gate rejects (an inescapable
+	// dead-end). The allowlist is exempted; an explicit DisabledTools entry for
+	// tool_search is still honored (only the allowlist is exempted, not the denylist).
+	toolSearchAllowed := call.Name == tools.ToolSearchToolName && !containsToolName(options.DisabledTools, tools.ToolSearchToolName)
+	if !toolSearchAllowed && !ToolAllowedByFilters(call.Name, options.EnabledTools, options.DisabledTools) {
 		return ToolResult{
 			ToolCallID:   call.ID,
 			Name:         call.Name,
@@ -443,6 +449,10 @@ func executeToolCall(ctx context.Context, registry *tools.Registry, call ToolCal
 		ReasoningEffort:   options.ReasoningEffort,
 		Depth:             options.Depth,
 		Cwd:               options.Cwd,
+		// Forward the run's operator tool filters so a filter-aware tool
+		// (tool_search) never discloses or loads an operator-hidden deferred tool.
+		EnabledTools:  options.EnabledTools,
+		DisabledTools: options.DisabledTools,
 		// The sandbox decision (if any) is returned synchronously on the Result and
 		// used here for permission event building.
 	})
@@ -884,6 +894,7 @@ func partitionTools(registry *tools.Registry, permissionMode PermissionMode, opt
 	active := options.DeferThreshold > 0 && eligible >= options.DeferThreshold
 
 	definitions := make([]zeroruntime.ToolDefinition, 0, len(visible))
+	exposedNames := make(map[string]bool, len(visible))
 	var hiddenLines []string
 	for _, tool := range visible {
 		name := tool.Name()
@@ -891,7 +902,7 @@ func partitionTools(registry *tools.Registry, permissionMode PermissionMode, opt
 
 		if !active {
 			// Inactive: byte-identical to legacy, but tool_search is never advertised.
-			if name == "tool_search" {
+			if name == tools.ToolSearchToolName {
 				continue
 			}
 			definitions = append(definitions, zeroruntime.ToolDefinition{
@@ -899,6 +910,7 @@ func partitionTools(registry *tools.Registry, permissionMode PermissionMode, opt
 				Description: tool.Description(),
 				Parameters:  schemaToRuntimeMap(tool.Parameters()),
 			})
+			exposedNames[name] = true
 			continue
 		}
 
@@ -912,6 +924,23 @@ func partitionTools(registry *tools.Registry, permissionMode PermissionMode, opt
 			Description: tool.Description(),
 			Parameters:  schemaToRuntimeMap(tool.Parameters()),
 		})
+		exposedNames[name] = true
+	}
+
+	// On the ACTIVE path, tool_search is the gateway to the allowlisted deferred
+	// tools, so it must ALWAYS be reachable — even when a non-empty EnabledTools
+	// allowlist omits it (the operator allowlisted the deferred tools, not the
+	// loader). Expose its full definition unless an explicit DisabledTools entry
+	// turns the loader itself off. This never runs on the inactive path, so the
+	// byte-identical below-threshold output is preserved.
+	if active && !exposedNames[tools.ToolSearchToolName] && !containsToolName(options.DisabledTools, tools.ToolSearchToolName) {
+		if loader, ok := registry.Get(tools.ToolSearchToolName); ok {
+			definitions = append(definitions, zeroruntime.ToolDefinition{
+				Name:        loader.Name(),
+				Description: loader.Description(),
+				Parameters:  schemaToRuntimeMap(loader.Parameters()),
+			})
+		}
 	}
 
 	sort.Slice(definitions, func(left int, right int) bool {
