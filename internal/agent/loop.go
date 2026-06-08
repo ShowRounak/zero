@@ -800,15 +800,67 @@ func permissionActionFromSandbox(action sandbox.Action) PermissionAction {
 	}
 }
 
+// toolDefinitions returns the full-schema tool list for a turn. It now delegates
+// to partitionTools with no loaded set; with deferral inactive (the only state
+// the bare toolDefinitions is used in) the exposed slice is byte-identical to the
+// pre-deferral output. Retained so existing callers/tests keep their signature.
 func toolDefinitions(registry *tools.Registry, permissionMode PermissionMode, options Options) []zeroruntime.ToolDefinition {
+	exposed, _ := partitionTools(registry, permissionMode, options, map[string]bool{})
+	return exposed
+}
+
+// partitionTools builds the per-turn advertised tool list and an optional
+// deferred-tools reminder. INACTIVE (DeferThreshold <= 0 or the eligible count is
+// below it): every visible tool is exposed with its full schema EXCEPT tool_search
+// (dropped so it is never advertised when it cannot help), and the reminder is
+// empty — byte-identical to the pre-deferral output. ACTIVE: a deferred-eligible
+// tool is exposed only when loaded[name]; otherwise it is hidden and its compact
+// line goes into the reminder. Non-deferred tools (including tool_search) are
+// always exposed. The exposed slice is alpha-sorted by name, matching the legacy
+// order so the inactive path is stable.
+func partitionTools(registry *tools.Registry, permissionMode PermissionMode, options Options, loaded map[string]bool) ([]zeroruntime.ToolDefinition, string) {
 	registeredTools := registry.All()
-	definitions := make([]zeroruntime.ToolDefinition, 0, len(registeredTools))
+
+	visible := make([]tools.Tool, 0, len(registeredTools))
+	eligible := 0
 	for _, tool := range registeredTools {
 		if !ToolVisible(tool, permissionMode, options.EnabledTools, options.DisabledTools) {
 			continue
 		}
+		visible = append(visible, tool)
+		if tools.IsDeferred(tool) {
+			eligible++
+		}
+	}
+
+	active := options.DeferThreshold > 0 && eligible >= options.DeferThreshold
+
+	definitions := make([]zeroruntime.ToolDefinition, 0, len(visible))
+	var hiddenLines []string
+	for _, tool := range visible {
+		name := tool.Name()
+		deferred := tools.IsDeferred(tool)
+
+		if !active {
+			// Inactive: byte-identical to legacy, but tool_search is never advertised.
+			if name == "tool_search" {
+				continue
+			}
+			definitions = append(definitions, zeroruntime.ToolDefinition{
+				Name:        name,
+				Description: tool.Description(),
+				Parameters:  schemaToRuntimeMap(tool.Parameters()),
+			})
+			continue
+		}
+
+		// Active path.
+		if deferred && !loaded[name] {
+			hiddenLines = append(hiddenLines, tools.DeferredLine(tool))
+			continue
+		}
 		definitions = append(definitions, zeroruntime.ToolDefinition{
-			Name:        tool.Name(),
+			Name:        name,
 			Description: tool.Description(),
 			Parameters:  schemaToRuntimeMap(tool.Parameters()),
 		})
@@ -817,7 +869,12 @@ func toolDefinitions(registry *tools.Registry, permissionMode PermissionMode, op
 	sort.Slice(definitions, func(left int, right int) bool {
 		return definitions[left].Name < definitions[right].Name
 	})
-	return definitions
+
+	reminder := ""
+	if active {
+		reminder = tools.BuildDeferredReminder(hiddenLines)
+	}
+	return definitions, reminder
 }
 
 func ToolVisible(tool tools.Tool, permissionMode PermissionMode, enabledTools []string, disabledTools []string) bool {

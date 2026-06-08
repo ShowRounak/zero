@@ -87,3 +87,92 @@ func TestExecuteToolCallNoLoadToolsMetaLeavesNil(t *testing.T) {
 		t.Fatalf("expected nil LoadedTools for a tool with no load_tools meta, got %#v", result.LoadedTools)
 	}
 }
+
+// fakeDeferredTool is deferred-eligible (implements Deferred() bool) like an MCP
+// tool wrapper, so partitionTools counts and (when active) hides it.
+type fakeDeferredTool struct {
+	name string
+	desc string
+}
+
+func (t fakeDeferredTool) Name() string       { return t.name }
+func (t fakeDeferredTool) Description() string { return t.desc }
+func (t fakeDeferredTool) Parameters() tools.Schema {
+	return tools.Schema{Type: "object", AdditionalProperties: false}
+}
+func (t fakeDeferredTool) Safety() tools.Safety {
+	return tools.Safety{SideEffect: tools.SideEffectRead, Permission: tools.PermissionAllow}
+}
+func (t fakeDeferredTool) Run(_ context.Context, _ map[string]any) tools.Result {
+	return tools.Result{Status: tools.StatusOK, Output: "ok"}
+}
+func (t fakeDeferredTool) Deferred() bool { return true }
+
+// fakeToolSearchTool stands in for component D's tool_search (a non-deferred
+// builtin) so the inactive path can assert it is dropped.
+type fakeToolSearchTool struct{}
+
+func (fakeToolSearchTool) Name() string       { return "tool_search" }
+func (fakeToolSearchTool) Description() string { return "load deferred tool schemas" }
+func (fakeToolSearchTool) Parameters() tools.Schema {
+	return tools.Schema{Type: "object", AdditionalProperties: false}
+}
+func (fakeToolSearchTool) Safety() tools.Safety {
+	return tools.Safety{SideEffect: tools.SideEffectNone, Permission: tools.PermissionAllow, AdvertiseInAuto: true}
+}
+func (fakeToolSearchTool) Run(_ context.Context, _ map[string]any) tools.Result {
+	return tools.Result{Status: tools.StatusOK, Output: "ok"}
+}
+
+func TestPartitionToolsInactiveIsByteIdenticalAndDropsToolSearch(t *testing.T) {
+	root := t.TempDir()
+	registry := tools.NewRegistry()
+	registry.Register(tools.NewReadFileTool(root))
+	registry.Register(fakeDeferredTool{name: "mcp__srv__a", desc: "tool a"})
+	registry.Register(fakeToolSearchTool{})
+
+	// DeferThreshold 0 => deferral disabled => inactive path.
+	exposed, reminder := partitionTools(registry, PermissionModeAuto, Options{DeferThreshold: 0}, map[string]bool{})
+
+	if reminder != "" {
+		t.Fatalf("expected empty reminder on inactive path, got %q", reminder)
+	}
+	// Exposed must equal the legacy full-schema definitions minus tool_search.
+	for _, def := range exposed {
+		if def.Name == "tool_search" {
+			t.Fatalf("tool_search must be dropped on inactive path, got %#v", exposed)
+		}
+	}
+	wantNames := map[string]bool{"read_file": true, "mcp__srv__a": true}
+	if len(exposed) != len(wantNames) {
+		t.Fatalf("expected %d exposed tools, got %d: %#v", len(wantNames), len(exposed), exposed)
+	}
+	for _, def := range exposed {
+		if !wantNames[def.Name] {
+			t.Fatalf("unexpected exposed tool %q", def.Name)
+		}
+	}
+	// The deferred tool keeps its FULL schema on the inactive path (not a hint).
+	for _, def := range exposed {
+		if def.Name == "mcp__srv__a" {
+			if def.Parameters["type"] != "object" {
+				t.Fatalf("expected full schema for deferred tool on inactive path, got %#v", def.Parameters)
+			}
+		}
+	}
+}
+
+// Below-threshold-but-eligible (count < threshold) is also inactive.
+func TestPartitionToolsBelowThresholdInactive(t *testing.T) {
+	registry := tools.NewRegistry()
+	registry.Register(fakeDeferredTool{name: "mcp__srv__a", desc: "a"})
+	registry.Register(fakeDeferredTool{name: "mcp__srv__b", desc: "b"})
+
+	exposed, reminder := partitionTools(registry, PermissionModeAuto, Options{DeferThreshold: 10}, map[string]bool{})
+	if reminder != "" {
+		t.Fatalf("expected empty reminder below threshold, got %q", reminder)
+	}
+	if len(exposed) != 2 {
+		t.Fatalf("expected both deferred tools exposed below threshold, got %#v", exposed)
+	}
+}
