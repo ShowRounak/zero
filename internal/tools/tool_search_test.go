@@ -52,6 +52,44 @@ func newDeferredFixtureRegistry() *Registry {
 	return reg
 }
 
+func TestToolSearchUnknownQueryReturnsNoMeta(t *testing.T) {
+	reg := newDeferredFixtureRegistry()
+	tool := NewToolSearchTool(reg).(optionsAwareTool)
+
+	for _, query := range []string{"select:does_not_exist", "select:", "zzznomatch"} {
+		result := tool.RunWithOptions(context.Background(),
+			map[string]any{"query": query}, RunOptions{})
+
+		if result.Status != StatusOK {
+			t.Fatalf("query %q: status = %s, want ok (informational)", query, result.Status)
+		}
+		if _, present := result.Meta["load_tools"]; present {
+			t.Fatalf("query %q: must NOT set load_tools, got %q", query, result.Meta["load_tools"])
+		}
+		// Informational message should name the available tools so the model can retry.
+		if !strings.Contains(result.Output, "weather_lookup") || !strings.Contains(result.Output, "stock_quote") {
+			t.Fatalf("query %q: message must name available tools, got %q", query, result.Output)
+		}
+	}
+}
+
+func TestToolSearchEmptyRegistryReportsNothingAvailable(t *testing.T) {
+	tool := NewToolSearchTool(NewRegistry()).(optionsAwareTool)
+
+	result := tool.RunWithOptions(context.Background(),
+		map[string]any{"query": "select:anything"}, RunOptions{})
+
+	if result.Status != StatusOK {
+		t.Fatalf("status = %s, want ok", result.Status)
+	}
+	if _, present := result.Meta["load_tools"]; present {
+		t.Fatalf("empty registry must not set load_tools, got %q", result.Meta["load_tools"])
+	}
+	if !strings.Contains(result.Output, "No deferred tools are available") {
+		t.Fatalf("unexpected message: %q", result.Output)
+	}
+}
+
 func TestToolSearchKeywordRanksByNameThenDescription(t *testing.T) {
 	reg := NewRegistry()
 	// name match should outrank a description-only match.
