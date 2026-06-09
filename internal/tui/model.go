@@ -80,7 +80,6 @@ type model struct {
 	themeVariant     int    // zeroline color theme (0-4)
 	themeDark        bool   // zeroline light/dark
 	frame            int    // animation frame counter (zeroline spinner)
-	booted           bool   // zeroline boot splash finished
 	jsonMode         bool   // zeroline TEXT/JSON view toggle (ctrl+j)
 	drawerOpen       bool   // zeroline sessions drawer (ctrl+s)
 	drawerIndex      int    // selected session row in the drawer
@@ -419,7 +418,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.skin == "zeroline" {
-			m.booted = true // any key dismisses the boot splash
 			if nm, handled := m.handleZerolineKeys(msg); handled {
 				return nm, nil
 			}
@@ -462,9 +460,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.frame++
-		if m.frame >= bootFrames {
-			m.booted = true
-		}
 		return m, zerolineTick()
 	case agentTextMsg:
 		if msg.runID != m.activeRunID {

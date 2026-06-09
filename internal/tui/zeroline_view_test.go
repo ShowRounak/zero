@@ -21,7 +21,6 @@ func newZerolineModel() model {
 		ModelName:    "claude-sonnet-4.5",
 	})
 	m.width, m.height = 100, 30
-	m.booted = true // skip the boot splash animation; these tests cover home/chat
 	return m
 }
 

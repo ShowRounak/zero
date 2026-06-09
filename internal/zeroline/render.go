@@ -126,47 +126,6 @@ func newStyles(p Pal, variant int, dark bool) styles {
 	return styles{p, variant, dark, f(p.Fg), f(p.Dim), f(p.Mute), f(p.Accent), f(p.Accent2), f(p.Green), f(p.Red), f(p.Amber)}
 }
 
-// newCanvasStyles is for full-bleed surfaces (the home + boot splash) where text
-// sits directly on the themed background. Each style carries the theme background
-// so content cells match the surrounding whitespace fill — otherwise the text
-// shows the terminal's own background, producing a visible "card" against the
-// themed margins.
-func newCanvasStyles(p Pal, variant int, dark bool) styles {
-	f := func(c lipgloss.Color) lipgloss.Style {
-		return lipgloss.NewStyle().Foreground(c).Background(p.Bg)
-	}
-	return styles{p, variant, dark, f(p.Fg), f(p.Dim), f(p.Mute), f(p.Accent), f(p.Accent2), f(p.Green), f(p.Red), f(p.Amber)}
-}
-
-// RenderBoot renders the launch splash: the ZERO wordmark reveals line-by-line,
-// then the tagline and a loading line, advancing by animation frame (~120ms).
-func RenderBoot(variant int, dark bool, frame, w, h int) string {
-	p := Resolve(variant, dark)
-	s := newCanvasStyles(p, variant, dark)
-	reveal := []int{1, 3, 5, 7, 9} // per-line reveal frames (~120ms each)
-	var b strings.Builder
-	for i, l := range wordmark {
-		if i < len(reveal) && frame >= reveal[i] {
-			b.WriteString(s.acc.Render(l) + "\n")
-		} else {
-			b.WriteString(strings.Repeat(" ", len([]rune(l))) + "\n")
-		}
-	}
-	b.WriteString("\n")
-	if frame >= 11 {
-		b.WriteString(s.dim.Render("Own your agent. ") + s.acc2.Render("Any model.") + s.dim.Render(" Zero lock-in.") + "\n")
-	} else {
-		b.WriteString("\n")
-	}
-	b.WriteString("\n")
-	if frame >= 8 {
-		b.WriteString(s.mute.Render("initializing runtime · loading providers ") + s.amb.Render(spinFrames[frame%len(spinFrames)]))
-	}
-	content := lipgloss.NewStyle().Align(lipgloss.Center).Background(p.Bg).Render(b.String())
-	return lipgloss.Place(maxi(w, 40), maxi(h, 8), lipgloss.Center, lipgloss.Center, content,
-		lipgloss.WithWhitespaceBackground(p.Bg))
-}
-
 // ---------------------------------------------------------------- HOME (ZEN)
 
 // DefaultSessions returns the sample session list used by the snapshot renderer
@@ -1404,14 +1363,6 @@ func toolLabel(tool string) string {
 }
 
 // --- small helpers -----------------------------------------------------------
-
-var wordmark = []string{
-	" ███████  ███████  ██████   ██████ ",
-	"      ██  ██       ██   ██  ██   ██",
-	"    ███   █████    ██████   ██   ██",
-	"  ███     ██       ██   ██  ██   ██",
-	" ███████  ███████  ██   ██   ██████",
-}
 
 func hasAssistant(rows []Row) bool {
 	for _, r := range rows {

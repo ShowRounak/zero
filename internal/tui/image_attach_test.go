@@ -152,7 +152,6 @@ func TestZerolineViewShowsImageChips(t *testing.T) {
 	m.width = 100
 	m.height = 30
 	m.showSplash = false
-	m.booted = true
 	m.pendingImageLabels = []string{"photo.png"}
 
 	view := m.zerolineView()

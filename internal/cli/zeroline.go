@@ -24,7 +24,6 @@ func runZeroline(args []string, stdout io.Writer, stderr io.Writer, deps appDeps
 	variant := fs.Int("variant", 0, "color theme 0-5 (0 ZERO, 1 Phosphor, 2 Cyan, 3 Sage, 4 Violet, 5 Mono)")
 	light := fs.Bool("light", false, "use the light variant for the snapshot")
 	perm := fs.Bool("perm", false, "show the centered permission modal in the chat snapshot")
-	boot := fs.Int("boot", -1, "render the boot splash at the given animation frame")
 	stream := fs.Bool("stream", false, "show a streaming assistant response in the chat snapshot")
 	jsonMode := fs.Bool("json", false, "render the chat snapshot in JSON mode (TEXT/JSON toggle)")
 	sessionsDrawer := fs.Bool("sessions", false, "show the sessions drawer in the chat snapshot")
@@ -41,12 +40,6 @@ func runZeroline(args []string, stdout io.Writer, stderr io.Writer, deps appDeps
 		v := *variant // theme index directly (0 ZERO, 1 Phosphor, …)
 		if v < 0 || v >= len(zeroline.Themes) {
 			v = 0
-		}
-		if *boot >= 0 {
-			if _, err := fmt.Fprintln(stdout, zeroline.RenderBoot(v, !*light, *boot, *width, *height)); err != nil {
-				return 1
-			}
-			return 0
 		}
 		hdr := zeroline.Header{Cwd: "~/src/zero", Branch: "main", Model: "claude-sonnet-4.5", Provider: "anthropic"}
 		var frame string

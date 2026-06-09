@@ -14,10 +14,6 @@ import (
 // agent events so "working…" spins smoothly between row updates.
 type zerolineTickMsg time.Time
 
-// bootFrames is how many ~120ms ticks the boot splash plays before the home
-// page reveals (~1.9s), matching the mockup's splash timing.
-const bootFrames = 16
-
 func zerolineTick() tea.Cmd {
 	return tea.Tick(120*time.Millisecond, func(t time.Time) tea.Msg { return zerolineTickMsg(t) })
 }
@@ -148,11 +144,6 @@ func (m model) zerolineView() string {
 	}
 	if height <= 0 {
 		height = 30
-	}
-
-	// Boot splash reveals on launch, then the home page.
-	if !m.booted && m.showSplash {
-		return zeroline.RenderBoot(m.themeVariant, m.themeDark, m.frame, width, height)
 	}
 
 	// Spec composer placeholder per surface (m is a value receiver, so this only

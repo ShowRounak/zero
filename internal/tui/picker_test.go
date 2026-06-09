@@ -187,7 +187,6 @@ func TestPickerRendersInBothSkins(t *testing.T) {
 	// Zeroline skin.
 	z := newModel(context.Background(), Options{Skin: "zeroline", ThemeDark: true, ModelName: "claude-sonnet-4.5"})
 	z.width, z.height = 100, 30
-	z.booted = true
 	z.showSplash = false
 	z.input.SetValue("/model")
 	updatedZ, _ := z.Update(tea.KeyMsg{Type: tea.KeyEnter})

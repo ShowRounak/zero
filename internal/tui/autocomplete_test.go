@@ -218,7 +218,6 @@ func TestSuggestionOverlayRendersInDefaultSkin(t *testing.T) {
 func TestSuggestionOverlayRendersInZerolineSkin(t *testing.T) {
 	m := newModel(context.Background(), Options{Skin: "zeroline", ThemeDark: true})
 	m.width, m.height = 100, 30
-	m.booted = true
 	m.showSplash = false
 	m = typeRunes(t, m, "/mo")
 
