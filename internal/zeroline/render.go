@@ -153,11 +153,6 @@ func newCanvasStyles(p Pal, variant int, dark bool) styles {
 	return styles{p, variant, dark, f(p.Fg), f(p.Dim), f(p.Mute), f(p.Accent), f(p.Accent2), f(p.Green), f(p.Red), f(p.Amber)}
 }
 
-// block is a solid caret cell used for the streaming cursor.
-func (s styles) block() string {
-	return lipgloss.NewStyle().Background(s.pal.Accent).Render(" ")
-}
-
 // RenderBoot renders the launch splash: the ZERO wordmark reveals line-by-line,
 // then the tagline and a loading line, advancing by animation frame (~120ms).
 func RenderBoot(variant int, dark bool, frame, w, h int) string {
@@ -1364,18 +1359,6 @@ func splitGrepLine(ln string) (loc, text string) {
 	}
 }
 
-// renderAssistant lays out a model message. Completed messages (markdown=true)
-// are rendered through glamour for full CommonMark + chroma-highlighted fenced
-// code in one pass; live streaming text (markdown=false) stays plain because
-// partial markdown renders badly mid-stream. Either way the body is indented to
-// sit under the "✦ zero" label.
-func (s styles) renderAssistant(text string, tw int, markdown bool) []string {
-	if markdown && strings.TrimSpace(text) != "" {
-		return s.renderAssistantMarkdown(text, tw)
-	}
-	return s.renderAssistantPlain(text, tw)
-}
-
 // renderAssistantMarkdown runs the message through glamour and lays the result
 // out under the label with the same 8-space indent as the plain path, on the
 // theme background so no card reappears against the full-bleed canvas.
@@ -1439,44 +1422,6 @@ func (s styles) renderAssistantPlain(text string, tw int) []string {
 		out = []string{""}
 	}
 	return out
-}
-
-// renderCodeBlock renders tool output (file contents, diffs, listings) as an
-// aligned block with a left gutter, clipped to width and capped at max lines.
-// Unified diffs get +/-/@@ coloring; everything else stays neutral.
-func (s styles) renderCodeBlock(detail string, tw, max int) []string {
-	detail = strings.TrimRight(detail, "\n")
-	if detail == "" {
-		return nil
-	}
-	isDiff := strings.Contains(detail, "@@ ") || strings.HasPrefix(strings.TrimSpace(detail), "diff ") ||
-		strings.Contains(detail, "\n--- ") || strings.Contains(detail, "\n+++ ")
-	lines := strings.Split(detail, "\n")
-	gut := s.mute.Render("│ ")
-	var out []string
-	for i, ln := range lines {
-		if i >= max {
-			out = append(out, "      "+s.mute.Render(fmt.Sprintf("│ … +%d more lines", len(lines)-i)))
-			break
-		}
-		out = append(out, "      "+gut+s.codeLine(detab(ln), tw-8, isDiff))
-	}
-	return out
-}
-
-func (s styles) codeLine(ln string, w int, isDiff bool) string {
-	c := clip(ln, w)
-	if isDiff {
-		switch {
-		case strings.HasPrefix(ln, "@@"):
-			return s.acc.Render(c)
-		case strings.HasPrefix(ln, "+"):
-			return s.green.Render(c)
-		case strings.HasPrefix(ln, "-"):
-			return s.red.Render(c)
-		}
-	}
-	return s.dim.Render(c)
 }
 
 // diffMaxLines caps how many diff lines are colorized inline before a "… N more
@@ -1554,69 +1499,6 @@ func (s styles) diffLine(ln string, cw int) string {
 }
 
 func detab(s string) string { return strings.ReplaceAll(s, "\t", "    ") }
-
-// resultSummary collapses a tool's raw output into a one-line summary the way a
-// proper coding agent does (file reads → line counts, listings → entry counts),
-// and decides whether the full body (diffs, shell output, grep hits) is shown.
-func resultSummary(tool, status, detail string) (summary string, showBody bool, bodyMax int) {
-	if status == "error" {
-		return "", true, 3
-	}
-	switch tool {
-	case "read_file":
-		fl := firstLine(detail)
-		if i := strings.LastIndex(fl, "("); i >= 0 {
-			return strings.TrimSuffix(fl[i+1:], ")"), false, 0 // "N lines" / "lines a-b of N"
-		}
-		return "read", false, 0
-	case "list_directory":
-		if strings.HasPrefix(firstLine(detail), "Directory is empty") {
-			return "empty", false, 0
-		}
-		return plural(countBodyLines(detail), "entry", "entries"), false, 0
-	case "glob":
-		return plural(countNonEmpty(detail), "match", "matches"), false, 0
-	case "grep":
-		fl := firstLine(detail)
-		if strings.HasPrefix(fl, "0 matches") || strings.HasPrefix(fl, "No matches") {
-			return "0 matches", false, 0
-		}
-		return plural(countNonEmpty(detail), "match", "matches"), true, 4
-	case "write_file", "edit_file", "apply_patch":
-		return "", true, 8
-	case "bash":
-		return "", true, 10
-	default:
-		return clip(firstLine(detail), 56), false, 0
-	}
-}
-
-func plural(n int, one, many string) string {
-	if n == 1 {
-		return "1 " + one
-	}
-	return strconv.Itoa(n) + " " + many
-}
-
-func countNonEmpty(s string) int {
-	n := 0
-	for _, ln := range strings.Split(s, "\n") {
-		if strings.TrimSpace(ln) != "" {
-			n++
-		}
-	}
-	return n
-}
-
-// countBodyLines counts non-empty lines after the first blank line (skips a
-// header like "Contents of .:").
-func countBodyLines(s string) int {
-	parts := strings.SplitN(s, "\n\n", 2)
-	if len(parts) == 2 {
-		return countNonEmpty(parts[1])
-	}
-	return countNonEmpty(s)
-}
 
 // --- tool glyph mapping ------------------------------------------------------
 
