@@ -830,7 +830,17 @@ func (s styles) transcript(d ChatData, w, h int) string {
 			lines = append(lines, s.toolCard(r, tw, d.Spin)...)
 		case "permission":
 			blank()
-			add(s.amb.Render("⚠ ") + s.dim.Render(clip(r.Text, tw-4)))
+			// .perm-resolved: color the line by outcome — allow/always green ✓,
+			// deny red ✗, otherwise (pending/prompt) amber ⚠.
+			low := strings.ToLower(r.Text)
+			switch {
+			case strings.Contains(low, "deny"):
+				add(s.red.Render("✗ " + clip(r.Text, tw-2)))
+			case strings.Contains(low, "allow"):
+				add(s.green.Render("✓ " + clip(r.Text, tw-2)))
+			default:
+				add(s.amb.Render("⚠ " + clip(r.Text, tw-2)))
+			}
 		case "system":
 			blank()
 			add(s.noteLines(r.Text, false, tw)...) // sys note (faint), one line each

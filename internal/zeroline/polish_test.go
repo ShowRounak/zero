@@ -61,6 +61,23 @@ func TestReadCardNoDoubleNumbering(t *testing.T) {
 	}
 }
 
+// Resolved-permission line is colored by outcome (.perm-resolved): allow/always
+// green ✓, deny red ✗, pending amber ⚠.
+func TestPermissionLineColoredByOutcome(t *testing.T) {
+	allow := stripANSI(RenderChat(chatWith([]Row{{Kind: "permission", Text: "permission: write_file allow risk:medium"}})))
+	if !strings.Contains(allow, "✓") || strings.Contains(allow, "⚠") {
+		t.Errorf("allowed permission should show ✓ (not ⚠): %q", allow)
+	}
+	deny := stripANSI(RenderChat(chatWith([]Row{{Kind: "permission", Text: "permission: bash deny risk:high"}})))
+	if !strings.Contains(deny, "✗") {
+		t.Errorf("denied permission should show ✗: %q", deny)
+	}
+	pend := stripANSI(RenderChat(chatWith([]Row{{Kind: "permission", Text: "permission: bash prompt risk:high"}})))
+	if !strings.Contains(pend, "⚠") {
+		t.Errorf("pending permission should show ⚠: %q", pend)
+	}
+}
+
 func TestHomeChipsAreSeparateBorderedBoxes(t *testing.T) {
 	d := HomeData{
 		Variant: 0, Dark: true, Width: 100, Height: 34, Header: Header{Model: "m"},
