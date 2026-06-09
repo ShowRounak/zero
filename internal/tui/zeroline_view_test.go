@@ -9,6 +9,7 @@ import (
 
 	"github.com/Gitlawb/zero/internal/agent"
 	"github.com/Gitlawb/zero/internal/tools"
+	"github.com/Gitlawb/zero/internal/zeroline"
 )
 
 func newZerolineModel() model {
@@ -91,10 +92,34 @@ func TestZerolinePermissionRender(t *testing.T) {
 		request: agent.PermissionRequest{ToolName: "edit_file", SideEffect: "write"},
 	}
 	out := m.View()
-	for _, want := range []string{"BLOCKED", "permission required", "edit_file", "allow", "deny"} {
+	for _, want := range []string{"BLOCKED", "PERMISSION", "edit_file", "allow", "deny"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("permission view missing %q", want)
 		}
+	}
+}
+
+func TestZerolinePermissionMouseClick(t *testing.T) {
+	m := newZerolineModel()
+	m.showSplash = false
+	m.pending = true
+	var got []permissionDecision
+	m.pendingPermission = &pendingPermissionPrompt{
+		request: agent.PermissionRequest{ToolName: "edit_file", SideEffect: "write"},
+		decide:  func(d agent.PermissionDecision) { got = append(got, permissionDecision(d.Action)) },
+	}
+	geo := zeroline.PermLayout(m.width, m.height)
+	if !geo.Active {
+		t.Fatal("expected active permission geometry at 100x30")
+	}
+	click := tea.MouseMsg{X: geo.Allow.X + geo.Allow.W/2, Y: geo.Allow.Y, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft}
+	updated, _ := m.Update(click)
+	next := updated.(model)
+	if len(got) != 1 || got[0] != permissionDecisionAllow {
+		t.Fatalf("mouse click on allow should resolve allow, got %#v", got)
+	}
+	if next.pendingPermission != nil {
+		t.Fatal("permission should clear after a resolving click")
 	}
 }
 

@@ -668,12 +668,17 @@ func (s styles) permModalLines(p *Perm, bw int) []string {
 	vb := amber.Render("│")
 	contentW := bw - 4 // borders + one space of padding each side
 
-	title := "permission required"
-	dashN := bw - 3 - lipgloss.Width(title) - 2
+	// Top row: a PERMISSION badge (amber fill, black text) + the risk level.
+	badge := lipgloss.NewStyle().Background(s.pal.Amber).Foreground(s.pal.Bg).Bold(true).Render(" PERMISSION ")
+	head := badge
+	if p.Risk != "" {
+		head += " " + s.amb.Render("RISK "+strings.ToUpper(p.Risk))
+	}
+	dashN := bw - 3 - lipgloss.Width(head) - 2
 	if dashN < 0 {
 		dashN = 0
 	}
-	topLine := amber.Render("╭─ ") + s.amb.Bold(true).Render(title) + amber.Render(" "+strings.Repeat("─", dashN)+"╮")
+	topLine := amber.Render("╭─ ") + head + amber.Render(" "+strings.Repeat("─", dashN)+"╮")
 	botLine := amber.Render("╰" + strings.Repeat("─", bw-2) + "╯")
 
 	content := func(c string) string {
@@ -684,19 +689,11 @@ func (s styles) permModalLines(p *Perm, bw int) []string {
 		return vb + " " + c + strings.Repeat(" ", pad) + " " + vb
 	}
 
-	toolLine := s.fg.Bold(true).Render(clip(p.Tool, contentW))
-	risk := ""
-	if p.Risk != "" {
-		risk = "RISK " + strings.ToUpper(p.Risk)
-	}
-	reason := clip(orDash(p.Reason), contentW-lipgloss.Width(risk)-2)
-	meta := s.dim.Render(reason)
-	if risk != "" {
-		meta += s.dim.Render("  ") + s.amb.Render(risk)
-	}
+	toolLine := s.amb.Bold(true).Render(clip(p.Tool, contentW))
+	meta := s.dim.Render(clip(orDash(p.Reason), contentW))
 
 	allowBtn := lipgloss.NewStyle().Background(s.pal.Accent).Foreground(s.pal.Bg).Bold(true).Render("[ a · allow ]")
-	alwaysBtn := s.dim.Render("[ ") + s.acc.Render("y") + s.dim.Render(" · always ]")
+	alwaysBtn := s.dim.Render("[ ") + s.acc.Render("A") + s.dim.Render(" · always ]")
 	denyBtn := s.dim.Render("[ ") + s.acc.Render("d") + s.dim.Render(" · deny ]")
 	buttons := allowBtn + "  " + alwaysBtn + "  " + denyBtn
 	if bw < permMinBoxWidth {
@@ -704,7 +701,7 @@ func (s styles) permModalLines(p *Perm, bw int) []string {
 		// render a compact keyboard-only hint clipped to the content width instead.
 		// PermLayout disables the mouse hitboxes at this width, so the rendered row
 		// and the (absent) hit-test stay aligned.
-		buttons = clip(s.acc.Render("a")+s.dim.Render(" allow  ")+s.acc.Render("y")+s.dim.Render(" always  ")+s.acc.Render("d")+s.dim.Render(" deny"), contentW)
+		buttons = clip(s.acc.Render("a")+s.dim.Render(" allow  ")+s.acc.Render("A")+s.dim.Render(" always  ")+s.acc.Render("d")+s.dim.Render(" deny"), contentW)
 	}
 
 	lines := []string{
@@ -1070,7 +1067,9 @@ func (s styles) grepBody(detail string, w int) []string {
 		}
 		loc, text := splitGrepLine(ln)
 		lw := w / 2
-		out = append(out, blue.Render(clip(loc, lw))+"  "+s.mute.Render(clip(strings.TrimSpace(text), w-lw-2)))
+		// detab before clipping: a tab counts as 1 in clip() but renders wider, so
+		// untabbed text would overflow the card (mirrors the other body renderers).
+		out = append(out, blue.Render(clip(detab(loc), lw))+"  "+s.mute.Render(clip(detab(strings.TrimSpace(text)), w-lw-2)))
 		count++
 	}
 	out = append(out, faintest.Render(fmt.Sprintf("%d matches", count)))

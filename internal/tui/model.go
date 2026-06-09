@@ -19,6 +19,7 @@ import (
 	"github.com/Gitlawb/zero/internal/sessions"
 	"github.com/Gitlawb/zero/internal/tools"
 	"github.com/Gitlawb/zero/internal/usage"
+	"github.com/Gitlawb/zero/internal/zeroline"
 	"github.com/Gitlawb/zero/internal/zeroruntime"
 )
 
@@ -407,6 +408,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.input, cmd = m.input.Update(msg)
 		m.recomputeSuggestions()
 		return m, cmd
+	case tea.MouseMsg:
+		// Left-click resolves the zeroline permission card by hit-testing its
+		// buttons; the geometry is computed the same way the renderer lays them out.
+		if m.skin == "zeroline" && m.pendingPermission != nil &&
+			msg.Action == tea.MouseActionRelease && msg.Button == tea.MouseButtonLeft {
+			if geo := zeroline.PermLayout(m.width, m.height); geo.Active {
+				switch geo.Hit(msg.X, msg.Y) {
+				case "allow":
+					return m.resolvePermission(permissionDecisionAllow)
+				case "always":
+					return m.resolvePermission(permissionDecisionAlwaysAllow)
+				case "deny":
+					return m.resolvePermission(permissionDecisionDeny)
+				}
+			}
+		}
+		return m, nil
 	case tea.FocusMsg:
 		if m.notifier != nil {
 			m.notifier.SetFocused(true)
@@ -634,6 +652,9 @@ func startsTurn(kind rowKind) bool {
 }
 
 func (m model) handlePermissionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "A" { // capital A = always (spec: [a] allow, [A] always, [d] deny)
+		return m.resolvePermission(permissionDecisionAlwaysAllow)
+	}
 	switch strings.ToLower(msg.String()) {
 	case "a":
 		return m.resolvePermission(permissionDecisionAllow)

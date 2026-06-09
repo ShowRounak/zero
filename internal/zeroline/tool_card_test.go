@@ -60,6 +60,18 @@ func TestToolCardGrep(t *testing.T) {
 	}
 }
 
+func TestToolCardGrepTabsNoOverflow(t *testing.T) {
+	body := "a.go:1:if\tx\t{\treturn\tnil}\nb.go:2:foo\tbar\tbaz"
+	d := chatWith([]Row{{Kind: "tool", Tool: "grep", Text: ".", Detail: body, Status: "ok"}})
+	d.Width, d.Height = 60, 16
+	out := RenderChat(d)
+	for _, line := range strings.Split(out, "\n") {
+		if lipgloss.Width(line) > 60 {
+			t.Fatalf("grep line with tabs overflows width 60: %d (%q)", lipgloss.Width(line), stripANSI(line))
+		}
+	}
+}
+
 func TestToolCardFrameExact(t *testing.T) {
 	d := chatWith([]Row{{Kind: "tool", Tool: "edit_file", Text: "f.go", Detail: "+x\n-y\n z", Status: "ok"}})
 	d.Width, d.Height = 100, 26

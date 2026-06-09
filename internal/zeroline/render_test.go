@@ -69,7 +69,7 @@ func TestRenderChatLiveData(t *testing.T) {
 	d.Working = false
 	d.Perm = &Perm{Tool: "edit_file", Risk: "medium", Reason: "writes a file"}
 	p := RenderChat(d)
-	for _, want := range []string{"BLOCKED", "permission required", "edit_file", "allow", "always", "deny"} {
+	for _, want := range []string{"BLOCKED", "PERMISSION", "edit_file", "allow", "always", "deny"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("permission modal missing %q", want)
 		}
