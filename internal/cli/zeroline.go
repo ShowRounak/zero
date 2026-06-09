@@ -21,7 +21,7 @@ func runZeroline(args []string, stdout io.Writer, stderr io.Writer, deps appDeps
 	fs.SetOutput(stderr)
 	snapshot := fs.Bool("snapshot", false, "render a single frame to stdout and exit (no TTY)")
 	page := fs.String("page", "home", "snapshot page: home|chat")
-	variant := fs.Int("variant", 1, "color theme 1-5 (1 Phosphor, 2 Cyan, 3 Sage, 4 Violet, 5 Mono)")
+	variant := fs.Int("variant", 0, "color theme 0-5 (0 ZERO, 1 Phosphor, 2 Cyan, 3 Sage, 4 Violet, 5 Mono)")
 	light := fs.Bool("light", false, "use the light variant for the snapshot")
 	perm := fs.Bool("perm", false, "show the centered permission modal in the chat snapshot")
 	boot := fs.Int("boot", -1, "render the boot splash at the given animation frame")
