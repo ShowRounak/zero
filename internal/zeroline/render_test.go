@@ -46,7 +46,7 @@ func TestRenderChatLiveData(t *testing.T) {
 		},
 	}
 	out := RenderChat(d)
-	for _, want := range []string{"DONE", "you", "grep", "✦ zero", "claude-sonnet-4.5"} {
+	for _, want := range []string{"DONE", "❯", "grep", "claude-sonnet-4.5"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("chat render missing %q", want)
 		}

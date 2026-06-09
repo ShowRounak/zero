@@ -765,11 +765,19 @@ func (s styles) transcript(d ChatData, w, h int) string {
 		switch r.Kind {
 		case "user":
 			blank()
-			add(s.mute.Render("› ") + s.acc.Bold(true).Render("you ") + s.fg.Render(clip(r.Text, tw-6)))
+			add(s.acc.Bold(true).Render("❯ ") + s.fg.Render(clip(r.Text, tw-2)))
 		case "assistant":
 			blank()
-			add(s.acc2.Bold(true).Render("✦ zero"))
-			lines = append(lines, s.renderAssistant(r.Text, tw, true)...)
+			// Completed prose keeps markdown/code rendering (real messages inline
+			// code that the static mock routes through tool cards); the muted "say"
+			// look is reserved for live streaming below.
+			lines = append(lines, s.renderAssistant(r.Text, mini(74, tw), true)...)
+		case "final":
+			blank()
+			lines = append(lines, s.renderFinal(r.Text, mini(74, tw-2), false)...)
+		case "done":
+			blank()
+			add(s.doneLine(r.Text, r.Status))
 		case "toolcall":
 			blank()
 			marker := s.mute.Render("▸")
@@ -800,12 +808,10 @@ func (s styles) transcript(d ChatData, w, h int) string {
 			add(s.amb.Render("⚠ ") + s.dim.Render(clip(r.Text, tw-4)))
 		case "system":
 			blank()
-			for _, dl := range strings.Split(r.Text, "\n") {
-				add(s.dim.Render(clip(dl, tw)))
-			}
+			add(s.noteLine(r.Text, false, tw)) // sys note (faint)
 		case "error":
 			blank()
-			add(s.red.Render("✗ " + clip(r.Text, tw-4)))
+			add(s.noteLine(r.Text, true, tw)) // deny note (red)
 		}
 	}
 
@@ -817,15 +823,10 @@ func (s styles) transcript(d ChatData, w, h int) string {
 		add(s.askUserLines(d.AskUser, tw)...)
 	case d.Stream != "":
 		blank()
-		add(s.acc2.Bold(true).Render("✦ zero"))
-		slines := s.renderAssistant(d.Stream, tw, false)
-		if len(slines) > 0 {
-			slines[len(slines)-1] += s.block() // streaming caret
-		}
-		lines = append(lines, slines...)
+		lines = append(lines, s.renderSay(d.Stream, mini(74, tw), true)...) // muted say + caret
 	case d.Thinking:
 		blank()
-		add(s.acc2.Bold(true).Render("✦ zero") + "  " + s.amb.Render(spinFrames[d.Spin%len(spinFrames)]) +
+		add(s.amb.Render(spinFrames[d.Spin%len(spinFrames)]) +
 			s.dim.Render(" thinking"+strings.Repeat(".", d.Spin%4)))
 	}
 
@@ -841,6 +842,59 @@ func (s styles) transcript(d ChatData, w, h int) string {
 		out = lipgloss.NewStyle().Faint(true).Render(out)
 	}
 	return lipgloss.NewStyle().PaddingLeft(2).Render(out)
+}
+
+// renderSay lays out intermediate assistant prose (.blk-say): muted, wrapped at
+// w columns. While streaming, a blinking-style accent caret trails the last line.
+func (s styles) renderSay(text string, w int, streaming bool) []string {
+	var out []string
+	for _, l := range wrap(text, w) {
+		out = append(out, s.mute.Render(l))
+	}
+	if streaming {
+		if len(out) == 0 {
+			out = []string{""}
+		}
+		out[len(out)-1] += s.acc.Render("▌")
+	}
+	return out
+}
+
+// renderFinal lays out the final answer (.blk-final): a 1-col accent left rail +
+// ink text wrapped at w columns.
+func (s styles) renderFinal(text string, w int, streaming bool) []string {
+	rail := s.acc.Render("│")
+	var out []string
+	for _, l := range wrap(text, w) {
+		out = append(out, rail+" "+s.fg.Render(l))
+	}
+	if len(out) == 0 {
+		out = []string{rail}
+	}
+	if streaming {
+		out[len(out)-1] += s.acc.Render("▌")
+	}
+	return out
+}
+
+// doneLine renders the turn-summary line (.blk-done): a green ● (red on failure)
+// + faint meta (e.g. "12 tools · 1,284 tok · $0.04").
+func (s styles) doneLine(meta, status string) string {
+	dot := s.green.Render("●")
+	if status == "error" {
+		dot = s.red.Render("●")
+	}
+	return dot + " " + s.dim.Render(clip(firstLine(meta), 84))
+}
+
+// noteLine renders a one-line note (.blk-note): a faint sys note, or a red deny
+// note, marked with a left bar.
+func (s styles) noteLine(text string, deny bool, w int) string {
+	st := s.dim
+	if deny {
+		st = s.red
+	}
+	return st.Render("│ " + clip(firstLine(text), w-2))
 }
 
 // renderAssistant lays out a model message. Completed messages (markdown=true)

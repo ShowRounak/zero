@@ -41,7 +41,7 @@ func TestZerolineHomeThenChat(t *testing.T) {
 		{kind: rowToolResult, id: "t1", tool: "grep", status: tools.StatusOK, detail: "3 matches"},
 	}
 	chat := m.View()
-	for _, want := range []string{"WORKING", "you", "grep", "claude-sonnet-4.5", "thinking"} {
+	for _, want := range []string{"WORKING", "❯", "grep", "claude-sonnet-4.5", "thinking"} {
 		if !strings.Contains(chat, want) {
 			t.Errorf("chat view missing %q", want)
 		}
