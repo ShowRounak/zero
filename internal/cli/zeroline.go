@@ -28,6 +28,8 @@ func runZeroline(args []string, stdout io.Writer, stderr io.Writer, deps appDeps
 	stream := fs.Bool("stream", false, "show a streaming assistant response in the chat snapshot")
 	jsonMode := fs.Bool("json", false, "render the chat snapshot in JSON mode (TEXT/JSON toggle)")
 	sessionsDrawer := fs.Bool("sessions", false, "show the sessions drawer in the chat snapshot")
+	tool := fs.String("tool", "", "show a single tool card in the chat snapshot: diff|read|bash|grep")
+	frameN := fs.Int("frame", 0, "animation frame for the chat snapshot (spinner)")
 	width := fs.Int("width", 100, "snapshot width")
 	height := fs.Int("height", 30, "snapshot height")
 	skipUnsafe := fs.Bool("skip-permissions-unsafe", false, "launch in unsafe permission mode (enables the ! shell escape)")
@@ -36,7 +38,7 @@ func runZeroline(args []string, stdout io.Writer, stderr io.Writer, deps appDeps
 	}
 
 	if *snapshot {
-		v := *variant - 1
+		v := *variant // theme index directly (0 ZERO, 1 Phosphor, …)
 		if v < 0 || v >= len(zeroline.Themes) {
 			v = 0
 		}
@@ -62,6 +64,10 @@ func runZeroline(args []string, stdout io.Writer, stderr io.Writer, deps appDeps
 					{Kind: "done", Text: "4 tools · 1,284 tok · $0.04", Status: "ok"},
 				},
 				Input: "add a test for the new ToolExecutor",
+				Spin:  *frameN,
+			}
+			if *tool != "" {
+				cd.Rows = toolSnapshotRows(*tool)
 			}
 			if *perm {
 				cd.Perm = &zeroline.Perm{Tool: "edit_file", Risk: "medium", Reason: "writes internal/agent/exec.go and loop.go", Summary: "write"}
@@ -98,4 +104,28 @@ func runZeroline(args []string, stdout io.Writer, stderr io.Writer, deps appDeps
 		permissionMode = agent.PermissionModeUnsafe
 	}
 	return runInteractiveTUIWithSkin(stderr, deps, "zeroline", permissionMode)
+}
+
+// toolSnapshotRows builds a chat focused on a single tool card type, for
+// `zeroline --snapshot --tool <kind>`.
+func toolSnapshotRows(kind string) []zeroline.Row {
+	user := zeroline.Row{Kind: "user", Text: "show me the " + kind + " tool card"}
+	var tool zeroline.Row
+	switch kind {
+	case "diff":
+		tool = zeroline.Row{Kind: "tool", Tool: "edit_file", Text: "internal/cli/root.go", Status: "ok",
+			Detail: " \tfs.IntVar(&o.MaxSteps, \"max-steps\", 50, \"agent step cap\")\n+\tfs.BoolVar(&o.ShowVersion, \"version\", false, \"print version and exit\")\n \n+\tif o.ShowVersion {\n+\t\tfmt.Fprintln(o.Stdout, \"zero \"+buildinfo.Version)\n+\t}"}
+	case "read":
+		tool = zeroline.Row{Kind: "tool", Tool: "read_file", Text: "internal/agent/loop.go", Status: "ok",
+			Detail: "func (l *Loop) Run(ctx context.Context, task string) error {\n\tl.emit(Event{Type: EventStart})\n\tmsgs := l.seed(task)\n\tfor step := 0; step < l.MaxSteps; step++ {\n\t\treply, usage, err := l.model.Complete(ctx, msgs, l.tools)"}
+	case "bash":
+		tool = zeroline.Row{Kind: "tool", Tool: "bash", Text: "go test ./internal/cli/...", Status: "ok",
+			Detail: "ok  \tgithub.com/zero-dev/zero/internal/cli\t0.214s"}
+	case "grep":
+		tool = zeroline.Row{Kind: "tool", Tool: "grep", Text: "internal/cli", Status: "ok",
+			Detail: "internal/cli/root.go:41:fs := flag.NewFlagSet(\"zero\", flag.ContinueOnError)\ninternal/cli/root.go:47:fs.StringVar(&o.Model, \"model\", env(\"ZERO_MODEL\"), \"model id\")"}
+	default:
+		tool = zeroline.Row{Kind: "tool", Tool: kind, Text: "(unknown tool kind: " + kind + ")", Status: "error", Detail: "supported: diff|read|bash|grep"}
+	}
+	return []zeroline.Row{user, tool, {Kind: "done", Text: "1 tool · 214 tok", Status: "ok"}}
 }
