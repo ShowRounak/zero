@@ -81,6 +81,18 @@ type HomeData struct {
 	Picker      *Picker
 }
 
+// Session is one row in the sessions drawer.
+type Session struct {
+	ID, When, Title, Model string
+	Turns                  int
+}
+
+// Drawer is the open sessions slide-over (nil on ChatData means closed).
+type Drawer struct {
+	Sessions []Session
+	Selected int
+}
+
 // ChatData drives the Statusline chat page.
 type ChatData struct {
 	Variant       int
@@ -93,7 +105,8 @@ type ChatData struct {
 	Stream        string // live assistant text being streamed
 	TokS          int    // streaming tokens/sec
 	Spin          int
-	JSONMode      bool // render the run as syntax-colored JSON instead of the transcript
+	JSONMode      bool    // render the run as syntax-colored JSON instead of the transcript
+	Drawer        *Drawer // when non-nil, the sessions slide-over is open over the body
 	Perm          *Perm
 	// AskUser, when non-nil, is a pending ask_user questionnaire. It renders the
 	// focused question (over the spinner) so the zeroline skin mirrors the default
@@ -175,6 +188,18 @@ func RenderBoot(variant int, dark bool, frame, w, h int) string {
 }
 
 // ---------------------------------------------------------------- HOME (ZEN)
+
+// DefaultSessions returns the sample session list used by the snapshot renderer
+// and as a fallback when no real sessions exist.
+func DefaultSessions() []Session {
+	return []Session{
+		{ID: "0a91f3", When: "4m ago", Title: "Add streaming SSE assembly to OpenAI provider", Model: "anthropic/claude-sonnet-4-5", Turns: 14},
+		{ID: "b72c08", When: "1h ago", Title: "Context compaction: summarise oldest turns", Model: "openai/gpt-4o", Turns: 9},
+		{ID: "c104de", When: "3h ago", Title: "Workspace confinement: block symlink escape", Model: "anthropic/claude-sonnet-4-5", Turns: 22},
+		{ID: "d55a1b", When: "yesterday", Title: "Resolver maps model strings to providers", Model: "ollama/qwen3-coder", Turns: 6},
+		{ID: "e8830f", When: "yesterday", Title: "apply_patch rejects on context mismatch", Model: "groq/llama-3.3-70b", Turns: 11},
+	}
+}
 
 // DefaultChips returns the suggestion chips shown on the empty home screen.
 func DefaultChips() []string {
@@ -300,14 +325,20 @@ func RenderChat(d ChatData) string {
 	if bodyH < 1 {
 		bodyH = 1
 	}
+	underBody := func() string {
+		if d.JSONMode {
+			return s.jsonView(d, w, bodyH)
+		}
+		return s.transcript(d, w, bodyH)
+	}
 	var body string
 	switch {
 	case d.Perm != nil:
 		body = s.permModal(d.Perm, w, bodyH)
-	case d.JSONMode:
-		body = s.jsonView(d, w, bodyH)
+	case d.Drawer != nil:
+		body = s.drawerOverlay(underBody(), d.Drawer, w, bodyH)
 	default:
-		body = s.transcript(d, w, bodyH)
+		body = underBody()
 	}
 	frame := top + "\n" + body + "\n" + cmd
 	if overlay != "" {
@@ -1012,6 +1043,81 @@ func (s styles) jsonView(d ChatData, w, h int) string {
 		lines = append(lines, "")
 	}
 	return lipgloss.NewStyle().PaddingLeft(2).Render(strings.Join(lines, "\n"))
+}
+
+// ---- sessions drawer ----
+
+// drawerPanel renders the right-side sessions panel as exactly h rows, pw wide:
+// a header (title + sub) + session rows (accent id, faint timestamp, title, and
+// model · turns meta). The selected row carries an accent ▌ rail.
+func (s styles) drawerPanel(dr *Drawer, pw, h int) []string {
+	p := s.pal
+	bs := lipgloss.NewStyle().Foreground(p.Line2)
+	cw := pw - 4 // border (1 each) + 1 space padding each side
+	row := func(c string) string {
+		return bs.Render("│ ") + c + strings.Repeat(" ", maxi(0, cw-lipgloss.Width(c))) + bs.Render(" │")
+	}
+	var content []string
+	content = append(content,
+		s.fg.Bold(true).Render(clip("sessions", cw)),
+		s.mute.Render(clip(fmt.Sprintf("%d saved · resume / fork / export", len(dr.Sessions)), cw)),
+		bs.Render(strings.Repeat("─", cw)),
+	)
+	for i, sess := range dr.Sessions {
+		rail, title := "  ", s.dim
+		if i == dr.Selected {
+			rail, title = s.acc.Render("▌")+" ", s.fg
+		}
+		content = append(content,
+			rail+s.acc.Render(sess.ID)+"  "+s.mute.Render(sess.When),
+			rail+title.Render(clip(sess.Title, cw-2)),
+			rail+s.mute.Render(clip(fmt.Sprintf("%s · %d turns", sess.Model, sess.Turns), cw-2)),
+			"",
+		)
+	}
+	out := make([]string, 0, h)
+	out = append(out, bs.Render("╭"+strings.Repeat("─", pw-2)+"╮"))
+	for i := 0; i < h-2; i++ {
+		if i < len(content) {
+			out = append(out, row(content[i]))
+		} else {
+			out = append(out, row(""))
+		}
+	}
+	if h >= 2 {
+		out = append(out, bs.Render("╰"+strings.Repeat("─", pw-2)+"╯"))
+	}
+	return out
+}
+
+// drawerOverlay dims the body and composites the sessions panel on the right,
+// keeping each row exactly w cells and the block exactly h rows.
+func (s styles) drawerOverlay(base string, dr *Drawer, w, h int) string {
+	pw := mini(48, w-10)
+	if pw < 24 {
+		pw = mini(w-2, 24)
+	}
+	if pw < 14 {
+		return base // too narrow to overlay a usable panel
+	}
+	panel := s.drawerPanel(dr, pw, h)
+	leftW := w - pw
+	baseLines := strings.Split(base, "\n")
+	dim := lipgloss.NewStyle().Faint(true)
+	out := make([]string, 0, h)
+	for i := 0; i < h; i++ {
+		var bl string
+		if i < len(baseLines) {
+			bl = clip(baseLines[i], leftW)
+		}
+		left := dim.Render(bl) + strings.Repeat(" ", maxi(0, leftW-lipgloss.Width(bl)))
+		var pl string
+		if i < len(panel) {
+			pl = panel[i]
+		}
+		out = append(out, left+pl)
+	}
+	return strings.Join(out, "\n")
 }
 
 const cardBodyMax = 40 // cap card body lines so one tool can't dominate the frame

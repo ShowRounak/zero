@@ -137,6 +137,25 @@ func TestZerolineRunningToolSuppressesThinking(t *testing.T) {
 	}
 }
 
+func TestZerolineDrawerOpenClose(t *testing.T) {
+	m := newZerolineModel()
+	m.showSplash = false
+	// ctrl+s opens the drawer and renders the panel
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	m2 := updated.(model)
+	if !m2.drawerOpen {
+		t.Fatal("ctrl+s should open the sessions drawer")
+	}
+	if !strings.Contains(m2.View(), "sessions") {
+		t.Error("open drawer should render the panel")
+	}
+	// esc closes it
+	updated2, _ := m2.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if updated2.(model).drawerOpen {
+		t.Fatal("esc should close the sessions drawer")
+	}
+}
+
 func TestZerolineThemeKeys(t *testing.T) {
 	m := newZerolineModel()
 	// digit selects theme when input empty

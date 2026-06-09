@@ -82,6 +82,9 @@ type model struct {
 	frame            int    // animation frame counter (zeroline spinner)
 	booted           bool   // zeroline boot splash finished
 	jsonMode         bool   // zeroline TEXT/JSON view toggle (ctrl+j)
+	drawerOpen       bool   // zeroline sessions drawer (ctrl+s)
+	drawerIndex      int    // selected session row in the drawer
+	drawerSessions   []zeroline.Session
 	streamingText    string // live assistant text for the current segment
 	streamStartFrame int    // frame the current stream segment began (tok/s)
 
@@ -277,6 +280,23 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// The sessions drawer is a top-level modal: it intercepts keys (close,
+		// navigate) and swallows the rest before any other handler runs.
+		if m.skin == "zeroline" && m.drawerOpen {
+			switch msg.String() {
+			case "esc", "ctrl+s", "q":
+				m.drawerOpen = false
+			case "up", "k":
+				if m.drawerIndex > 0 {
+					m.drawerIndex--
+				}
+			case "down", "j":
+				if m.drawerIndex < len(m.drawerSessions)-1 {
+					m.drawerIndex++
+				}
+			}
+			return m, nil
+		}
 		switch msg.Type {
 		case tea.KeyCtrlC:
 			// cancelRun records the in-flight run into flushRunIDs and writes the

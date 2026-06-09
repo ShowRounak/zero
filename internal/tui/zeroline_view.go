@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -35,6 +36,11 @@ func (m model) handleZerolineKeys(msg tea.KeyMsg) (model, bool) {
 	case "ctrl+j":
 		m.jsonMode = !m.jsonMode // TEXT/JSON view toggle
 		return m, true
+	case "ctrl+s":
+		m.drawerOpen = true // sessions drawer (Esc/ctrl+s closes; handled in Update)
+		m.drawerSessions = m.loadDrawerSessions()
+		m.drawerIndex = 0
+		return m, true
 	}
 	if strings.TrimSpace(m.input.Value()) == "" {
 		if k := msg.String(); len(k) == 1 && k >= "1" && k <= "5" {
@@ -43,6 +49,72 @@ func (m model) handleZerolineKeys(msg tea.KeyMsg) (model, bool) {
 		}
 	}
 	return m, false
+}
+
+// drawerData returns the open sessions drawer (nil when closed).
+func (m model) drawerData() *zeroline.Drawer {
+	if !m.drawerOpen {
+		return nil
+	}
+	return &zeroline.Drawer{Sessions: m.drawerSessions, Selected: m.drawerIndex}
+}
+
+// loadDrawerSessions lists real sessions from the store (most-recent first),
+// falling back to the sample list when the store is empty or unavailable.
+func (m model) loadDrawerSessions() []zeroline.Session {
+	if m.sessionStore == nil {
+		return zeroline.DefaultSessions()
+	}
+	items, err := m.sessionStore.List()
+	if err != nil || len(items) == 0 {
+		return zeroline.DefaultSessions()
+	}
+	out := make([]zeroline.Session, 0, len(items))
+	for _, it := range items {
+		title := strings.TrimSpace(it.Title)
+		if title == "" {
+			title = "(untitled)"
+		}
+		id := it.SessionID
+		if len(id) > 6 {
+			id = id[:6]
+		}
+		out = append(out, zeroline.Session{
+			ID:    id,
+			When:  m.relativeWhen(it.UpdatedAt),
+			Title: title,
+			Model: it.ModelID,
+			Turns: it.EventCount,
+		})
+		if len(out) >= 12 {
+			break
+		}
+	}
+	return out
+}
+
+// relativeWhen formats an RFC3339 timestamp as a short relative age (falls back
+// to the raw string if it can't be parsed).
+func (m model) relativeWhen(s string) string {
+	t, err := time.Parse(time.RFC3339, strings.TrimSpace(s))
+	if err != nil {
+		return s
+	}
+	now := time.Now
+	if m.now != nil {
+		now = m.now
+	}
+	d := now().Sub(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
 }
 
 // zerolineHeader builds the zeroline header, including the live cost and
@@ -125,6 +197,7 @@ func (m model) zerolineView() string {
 		TokS:        m.streamTokS(),
 		Spin:        m.frame,
 		JSONMode:    m.jsonMode,
+		Drawer:      m.drawerData(),
 		Perm:        m.zerolinePerm(),
 		AskUser:     askUser,
 		Input:       m.input.View(),
