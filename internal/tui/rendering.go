@@ -125,6 +125,13 @@ func buildRowContext(rows []transcriptRow) rowContext {
 // decided collapses into its decision line; an unprompted allow is already
 // surfaced as the card's [auto] tag.
 func (rc rowContext) skip(row transcriptRow) bool {
+	// The plan is surfaced live in the right-side plan panel (and on demand via
+	// /plan), so update_plan's tool call and its "Current Plan: …" result are NOT
+	// echoed inline — that keeps the chat focused on the actual work instead of
+	// repeating the whole plan on every revision.
+	if row.tool == planToolName && (row.kind == rowToolCall || row.kind == rowToolResult) {
+		return true
+	}
 	switch row.kind {
 	case rowToolCall:
 		return row.id != "" && rc.resolved[rcKey(row.runID, row.id)]
