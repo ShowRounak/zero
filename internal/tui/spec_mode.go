@@ -72,6 +72,7 @@ func (m model) handleSpecCommand(task string) (tea.Model, tea.Cmd) {
 	m.activeRunID = m.runID
 	m.runCancel = cancel
 	m.pending = true
+	m.runStartedAt = m.now()
 	return m, tea.Batch(m.runAgentWithOptions(m.activeRunID, runCtx, task, turnImages, tuiAgentRunOptions{
 		registry:       specRegistry,
 		permissionMode: agent.PermissionModeSpecDraft,
@@ -220,6 +221,7 @@ func (m model) approveSpecReview() (tea.Model, tea.Cmd) {
 	// counter so the cadence doesn't carry over a partial countdown.
 	m.workingVerbTicks = 0
 	m.workingVerb.Reset()
+	m.runStartedAt = m.now()
 	return m, tea.Batch(m.runAgent(m.activeRunID, runCtx, prompt, nil), m.spinner.Tick)
 }
 

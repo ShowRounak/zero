@@ -107,11 +107,14 @@ type model struct {
 	workingVerb      *workingWords
 	workingVerbTicks int
 	pending          bool
-	queuedMessage    string
-	exiting          bool
-	runCancel        context.CancelFunc
-	runID            int
-	activeRunID      int
+	// runStartedAt stamps when the current run began; the plan panel shows the
+	// elapsed time off it. Zero when idle.
+	runStartedAt  time.Time
+	queuedMessage string
+	exiting       bool
+	runCancel     context.CancelFunc
+	runID         int
+	activeRunID   int
 	// flushRunIDs holds the ids of runs cancelled while still in flight, mapped
 	// to the session they were recording into AT CANCEL TIME. Each cancelled
 	// agent goroutine keeps running to completion and returns its accumulated
@@ -1227,12 +1230,14 @@ func (m model) updateModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) View() tea.View {
 	var content string
 	if m.setup.visible {
-		content = m.setupView(chatWidth(m.width))
+		content = m.setupView(m.chatAreaWidth())
 	} else if m.transcriptDetailed {
 		content = m.detailedTranscriptView()
 	} else {
 		content = m.transcriptView()
 	}
+	// Dock the live plan/progress panel on the right (no-op when inactive).
+	content = m.composeWithPlanPanel(content)
 
 	view := tea.NewView(content)
 	view.AltScreen = m.altScreen
@@ -1259,7 +1264,7 @@ func (m model) transcriptEmpty() bool {
 // the managed conversation view. Streaming/modal blocks and composer chrome are
 // always rendered here.
 func (m model) transcriptView() string {
-	width := chatWidth(m.width)
+	width := m.chatAreaWidth()
 
 	suggestionOverlay := m.suggestionOverlay(width)
 	providerOverlay := m.providerWizardOverlay(width)
@@ -1880,7 +1885,7 @@ func (m model) moveComposerVisualCursor(direction int) (model, bool) {
 	if direction == 0 {
 		return m, false
 	}
-	width := chatWidth(m.width)
+	width := m.chatAreaWidth()
 	if width < 8 {
 		return m, false
 	}
@@ -2458,6 +2463,7 @@ func (m model) launchPrompt(prompt string) (model, tea.Cmd) {
 	// countdown from the previous run.
 	m.workingVerbTicks = 0
 	m.workingVerb.Reset()
+	m.runStartedAt = m.now()
 	return m, tea.Batch(m.runAgent(m.activeRunID, runCtx, prompt, turnImages), m.spinner.Tick)
 }
 

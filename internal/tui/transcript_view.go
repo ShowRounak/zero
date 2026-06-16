@@ -10,7 +10,7 @@ func (m model) toggleDetailedTranscript() model {
 }
 
 func (m model) detailedTranscriptView() string {
-	width := chatWidth(m.width)
+	width := m.chatAreaWidth()
 	rc := buildRowContext(m.transcript)
 	renderer := m
 	renderer.pending = false

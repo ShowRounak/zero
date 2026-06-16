@@ -335,7 +335,7 @@ func (m *model) selectSetupProviderAtMouse(msg tea.MouseMsg) (mouseSelectionTarg
 	if len(m.setup.providers) == 0 {
 		return mouseSelectionTarget{}, false
 	}
-	width := chatWidth(m.width)
+	width := m.chatAreaWidth()
 	height := normalizedStartupHeight(m.height)
 	rowWidth := setupProviderBlockWidth(width, m.setup.providers)
 	if !setupBlockContainsMouseX(mouseX(msg), width, rowWidth) {
@@ -374,7 +374,7 @@ func (m *model) selectSetupModelAtMouse(msg tea.MouseMsg) (mouseSelectionTarget,
 	if len(models) == 0 {
 		return mouseSelectionTarget{}, false
 	}
-	width := chatWidth(m.width)
+	width := m.chatAreaWidth()
 	height := normalizedStartupHeight(m.height)
 	rowWidth := setupModelBlockWidth(width, m.setup.models)
 	if !setupBlockContainsMouseX(mouseX(msg), width, rowWidth) {

@@ -64,7 +64,7 @@ func (m model) toolsText() string {
 func (m *model) mcpText() string {
 	width := 0
 	if m.width > 0 {
-		width = chatWidth(m.width)
+		width = m.chatAreaWidth()
 	}
 	return renderMCPView(m.mcpViewState(), width)
 }

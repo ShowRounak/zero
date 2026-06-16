@@ -325,7 +325,7 @@ func (m model) replaceComposerRangeWithPastePreviews(state composerState, start 
 }
 
 func (m model) composerPastePreviewWrapWidth() int {
-	width := chatWidth(m.width)
+	width := m.chatAreaWidth()
 	if width < 8 {
 		width = defaultStartupWidth
 	}

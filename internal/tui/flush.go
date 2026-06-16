@@ -88,7 +88,7 @@ func (m model) settleTranscript() (model, tea.Cmd) {
 		m.flushed = len(m.transcript)
 	}
 	rc := buildRowContext(m.transcript)
-	width := chatWidth(m.width)
+	width := m.chatAreaWidth()
 	batch := []string{}
 	previousKind, havePreviousKind := previousVisibleTranscriptKind(m.transcript, m.flushed, rc)
 	for m.flushed < len(m.transcript) {
