@@ -11,42 +11,54 @@ import (
 )
 
 const (
-	// planPanelOuterWidth is the column width the docked plan panel occupies,
-	// including its border. The chat area gives up exactly this many columns.
-	planPanelOuterWidth = 34
-	// planPanelMinChat is the narrowest the chat may get; below it the panel is
-	// hidden so the transcript never becomes unreadable on small terminals.
-	planPanelMinChat = 52
+	// planPanelWidth is the column width of the floating plan widget.
+	planPanelWidth = 40
+	// planPanelMinChat is the narrowest the chat may stay beside the widget;
+	// below it the widget is hidden so a small terminal isn't covered.
+	planPanelMinChat = 48
+	// planPanelMaxItems caps how many plan rows the widget lists before it
+	// summarizes the remainder.
+	planPanelMaxItems = 14
+	// planToolName is the tool whose call marks a run as having a plan.
+	planToolName = "update_plan"
 )
 
-// planPanelActive reports whether the right-docked plan/progress panel shows: an
-// alt-screen chat (not setup), a wide-enough terminal, and either a live plan or
-// a run in flight. When false, chatAreaWidth == chatWidth, so every existing
-// render and hit-test path behaves exactly as before.
+// planPanelActive reports whether the floating plan widget should be drawn. It
+// shows ONLY while a run is in flight AND that run has actually produced a plan
+// (called update_plan) — so a trivial "hi" never shows a stale plan from an
+// earlier task, and the widget disappears the moment the run finishes.
 func (m model) planPanelActive() bool {
 	if !m.altScreen || m.height <= 0 || m.setup.visible || m.transcriptDetailed {
 		return false
 	}
-	if chatWidth(m.width)-planPanelOuterWidth < planPanelMinChat {
+	if !m.pending {
 		return false
 	}
-	return m.pending || len(m.currentPlanItems()) > 0
-}
-
-// reservedPanelWidth is the columns the plan panel takes from the chat area.
-func (m model) reservedPanelWidth() int {
-	if m.planPanelActive() {
-		return planPanelOuterWidth
+	if chatWidth(m.width)-planPanelWidth < planPanelMinChat {
+		return false // keep the chat readable on small terminals
 	}
-	return 0
+	return m.currentRunHasPlan()
 }
 
-// chatAreaWidth is the width available to the transcript, composer, and overlays
-// once the docked plan panel (if any) has taken its column. It is the single
-// source of truth both the renderers and the mouse hit-tests use, so the panel
-// can never desync the click coordinates from what's drawn.
+// chatAreaWidth is the chat content width. The plan widget FLOATS over the
+// top-right corner rather than reserving a column, so this is simply the full
+// chat width — the renderers and mouse hit-tests are unchanged by the widget.
 func (m model) chatAreaWidth() int {
-	return chatWidth(m.width) - m.reservedPanelWidth()
+	return chatWidth(m.width)
+}
+
+// currentRunHasPlan reports whether the active run called update_plan (so the
+// live plan belongs to what the agent is doing right now, not a previous task).
+func (m model) currentRunHasPlan() bool {
+	if m.activeRunID == 0 {
+		return false
+	}
+	for _, row := range m.transcript {
+		if row.runID == m.activeRunID && row.kind == rowToolCall && row.tool == planToolName {
+			return true
+		}
+	}
+	return false
 }
 
 // currentPlanItems returns the live update_plan steps, or nil.
@@ -54,7 +66,7 @@ func (m model) currentPlanItems() []tools.PlanItem {
 	if m.registry == nil {
 		return nil
 	}
-	tool, ok := m.registry.Get("update_plan")
+	tool, ok := m.registry.Get(planToolName)
 	if !ok {
 		return nil
 	}
@@ -78,8 +90,8 @@ func (m model) runningToolName() string {
 	return ""
 }
 
-// planActivityLabel is the human word for what the agent is doing right now —
-// the "is it stuck?" signal. Empty when no run is in flight.
+// planActivityLabel is the human word for what the agent is doing right now.
+// Empty when no run is in flight.
 func (m model) planActivityLabel() string {
 	if !m.pending {
 		return ""
@@ -143,53 +155,58 @@ func formatPanelElapsed(d time.Duration) string {
 	return fmt.Sprintf("%d:%02d", total/60, total%60)
 }
 
-// renderPlanPanel draws the docked panel as exactly `height` lines of
-// planPanelOuterWidth columns: a header with the live activity (spinner + word +
-// elapsed) and the plan steps with status glyphs, framed in a left-separated box.
-func (m model) renderPlanPanel(height int) string {
-	if height < 2 {
-		height = 2
+// cutRunesEllipsis trims to limit runes, ending in "…" when it had to cut, so a
+// long plan step reads as truncated rather than a hard break mid-word.
+func cutRunesEllipsis(text string, limit int) string {
+	if limit <= 0 {
+		return ""
 	}
-	inner := planPanelOuterWidth - 4 // "│ " prefix + " │" suffix
-
-	header := "Plan"
-	if label := m.planActivityLabel(); label != "" {
-		header = strings.TrimSpace(m.spinner.View()) + " " + label
-		if !m.runStartedAt.IsZero() {
-			header += "  " + formatPanelElapsed(m.now().Sub(m.runStartedAt))
-		}
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
 	}
-
-	body := []string{zeroTheme.accent.Bold(true).Render(cutRunes(header, inner))}
-	body = append(body, "")
-	items := m.currentPlanItems()
-	if len(items) == 0 {
-		body = append(body, zeroTheme.faint.Render(cutRunes("waiting for a plan…", inner)))
-	} else {
-		for index, item := range items {
-			glyph, style := planStatusGlyph(item.Status)
-			label := fmt.Sprintf("%d %s", index+1, item.Content)
-			body = append(body, style.Render(glyph)+" "+zeroTheme.ink.Render(cutRunes(label, inner-2)))
-		}
+	if limit == 1 {
+		return "…"
 	}
-
-	return framePlanPanel(body, height, inner)
+	return string(runes[:limit-1]) + "…"
 }
 
-// framePlanPanel boxes body into exactly `height` lines of planPanelOuterWidth,
-// padding or clipping the body to fit, with the border doubling as the separator
-// from the chat area on its left.
-func framePlanPanel(body []string, height int, inner int) string {
+// renderPlanPanel draws the COMPACT widget: a "Plan" title, the live activity
+// line (spinner + word + elapsed), then the plan steps with status glyphs — in a
+// small box sized to its content (never the full terminal height).
+func (m model) renderPlanPanel() string {
+	inner := planPanelWidth - 4 // "│ " prefix + " │" suffix
+
+	body := []string{zeroTheme.accent.Bold(true).Render("Plan")}
+	if label := m.planActivityLabel(); label != "" {
+		status := strings.TrimSpace(m.spinner.View()) + " " + label
+		if !m.runStartedAt.IsZero() {
+			status += "  " + formatPanelElapsed(m.now().Sub(m.runStartedAt))
+		}
+		body = append(body, zeroTheme.faint.Render(cutRunesEllipsis(status, inner)))
+	}
+	body = append(body, "")
+
+	items := m.currentPlanItems()
+	for index, item := range items {
+		if index >= planPanelMaxItems {
+			body = append(body, zeroTheme.faint.Render(fmt.Sprintf("… %d more", len(items)-planPanelMaxItems)))
+			break
+		}
+		glyph, style := planStatusGlyph(item.Status)
+		text := cutRunesEllipsis(fmt.Sprintf("%d %s", index+1, item.Content), inner-2)
+		body = append(body, style.Render(glyph)+" "+zeroTheme.ink.Render(text))
+	}
+	return framePlanPanel(body)
+}
+
+// framePlanPanel boxes body into a compact widget exactly len(body)+2 lines tall
+// and planPanelWidth wide.
+func framePlanPanel(body []string) string {
 	border := zeroTheme.faint
-	rule := strings.Repeat("─", planPanelOuterWidth-2)
-	bodyRows := maxInt(0, height-2)
-	if len(body) > bodyRows {
-		body = body[:bodyRows]
-	}
-	for len(body) < bodyRows {
-		body = append(body, "")
-	}
-	lines := make([]string, 0, height)
+	inner := planPanelWidth - 4
+	rule := strings.Repeat("─", planPanelWidth-2)
+	lines := make([]string, 0, len(body)+2)
 	lines = append(lines, border.Render("╭"+rule+"╮"))
 	for _, row := range body {
 		fitted := fitStyledLine(row, inner)
@@ -200,26 +217,28 @@ func framePlanPanel(body []string, height int, inner int) string {
 	return strings.Join(lines, "\n")
 }
 
-// composeWithPlanPanel docks the plan panel onto the right of the rendered chat
-// content, row by row. The chat content is already rendered at chatAreaWidth, so
-// each line is padded to that width and the matching panel line is appended. A
-// no-op when the panel is inactive.
+// composeWithPlanPanel floats the compact widget over the TOP-RIGHT corner of the
+// rendered chat: only the first len(widget) rows are overlaid, on their rightmost
+// planPanelWidth columns, leaving the transcript full-width everywhere else. A
+// no-op when the widget is inactive.
 func (m model) composeWithPlanPanel(content string) string {
 	if !m.planPanelActive() {
 		return content
 	}
-	lines := strings.Split(content, "\n")
-	chatW := m.chatAreaWidth()
-	panelLines := strings.Split(m.renderPlanPanel(len(lines)), "\n")
-	out := make([]string, len(lines))
-	for index, line := range lines {
-		left := fitStyledLine(line, chatW)
-		left += strings.Repeat(" ", maxInt(0, chatW-lipgloss.Width(left)))
-		right := ""
-		if index < len(panelLines) {
-			right = panelLines[index]
-		}
-		out[index] = left + right
+	widget := strings.Split(m.renderPlanPanel(), "\n")
+	if len(widget) == 0 {
+		return content
 	}
-	return strings.Join(out, "\n")
+	fullWidth := chatWidth(m.width)
+	leftWidth := fullWidth - planPanelWidth
+	if leftWidth < planPanelMinChat {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	for index := 0; index < len(widget) && index < len(lines); index++ {
+		left := fitStyledLine(lines[index], leftWidth)
+		left += strings.Repeat(" ", maxInt(0, leftWidth-lipgloss.Width(left)))
+		lines[index] = left + widget[index]
+	}
+	return strings.Join(lines, "\n")
 }
