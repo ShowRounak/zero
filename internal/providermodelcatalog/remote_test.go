@@ -115,7 +115,6 @@ func TestModelsDevProviderIDMapsZeroAliases(t *testing.T) {
 		"github":       "github-models",
 		"moonshot":     "moonshotai",
 		"nvidia-nim":   "nvidia",
-		"xiaomi-mimo":  "xiaomi",
 		"dashscope":    "alibaba",
 		"ollama-cloud": "ollama-cloud",
 	}

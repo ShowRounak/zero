@@ -110,10 +110,6 @@ var curatedModels = map[string][]Model{
 		{ID: "llama-3.3-70b", Description: "general model"},
 		{ID: "deepseek-r1-671b", Description: "reasoning model"},
 	},
-	"xiaomi-mimo": {
-		{ID: "mimo-vl", Description: "catalog default"},
-		{ID: "mimo-v2.5-pro-ultraspeed", Description: "fast model"},
-	},
 	"bankr": {
 		{ID: "bankr-large", Description: "catalog default"},
 	},
@@ -127,10 +123,6 @@ var curatedModels = map[string][]Model{
 		{ID: "gpt-4.1", Description: "catalog default"},
 		{ID: "claude-sonnet-4.5", Description: "coding model"},
 		{ID: "gemini-2.5-pro", Description: "long-context model"},
-	},
-	"atomic-chat": {
-		{ID: "gpt-4.1", Description: "catalog default"},
-		{ID: "gpt-4o-mini", Description: "fast model"},
 	},
 	"custom-openai-compatible": {
 		{ID: "custom-model", Description: "custom endpoint model"},

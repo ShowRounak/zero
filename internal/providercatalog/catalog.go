@@ -102,11 +102,9 @@ var descriptors = []Descriptor{
 	transportDescriptor("vertex", "Vertex AI", TransportVertex, "https://aiplatform.googleapis.com", "gemini-2.5-pro", []string{"GOOGLE_APPLICATION_CREDENTIALS"}, []APIFormat{APIFormatVertexGenerateContent}, true),
 	oauthProvider(openAICompat("xai", "xAI", "https://api.x.ai/v1", "grok-4", []string{"XAI_API_KEY"}), false, true),
 	openAICompat("venice", "Venice AI", "https://api.venice.ai/api/v1", "qwen-2.5-qwq-32b", []string{"VENICE_API_KEY"}),
-	openAICompat("xiaomi-mimo", "Xiaomi MiMo", "https://api.mimo.xiaomi.com/openai/v1", "mimo-vl", []string{"MIMO_API_KEY", "XIAOMI_API_KEY"}, "xiaomi mimo"),
 	openAICompat("bankr", "Bankr", "https://api.bankr.bot/v1", "bankr-large", []string{"BANKR_API_KEY"}),
 	openAICompat("zai", "Z.ai", "https://open.bigmodel.cn/api/paas/v4", "glm-4.5", []string{"ZAI_API_KEY", "ZHIPU_API_KEY"}),
 	openAICompat("gitlawb-opengateway", "GitLawb OpenGateway", "https://gateway.gitlawb.com/v1", "gpt-4.1", []string{"GITLAWB_OPENGATEWAY_API_KEY"}, "gitlawb opengateway"),
-	openAICompat("atomic-chat", "Atomic Chat", "https://api.atomic.chat/v1", "gpt-4.1", []string{"ATOMIC_CHAT_API_KEY"}),
 	// ChatGPT subscription via a local OAuth proxy. A ChatGPT (Plus/Pro) OAuth
 	// token only works against ChatGPT's own backend (which is Cloudflare-gated to
 	// the official client), so zero does not call it directly; instead point this

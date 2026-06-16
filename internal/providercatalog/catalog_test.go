@@ -28,11 +28,9 @@ var expectedCatalogIDs = []string{
 	"vertex",
 	"xai",
 	"venice",
-	"xiaomi-mimo",
 	"bankr",
 	"zai",
 	"gitlawb-opengateway",
-	"atomic-chat",
 	"chatgpt-proxy",
 	"custom-openai-compatible",
 	"custom-anthropic-compatible",
@@ -172,7 +170,6 @@ func TestLookupNormalizesIDsAndAliases(t *testing.T) {
 		"mini_max":                     "minimax",
 		"Moonshot":                     "moonshot",
 		"nvidia nim":                   "nvidia-nim",
-		"xiaomi mimo":                  "xiaomi-mimo",
 		"custom_openai_compatible":     "custom-openai-compatible",
 		"custom--anthropic compatible": "custom-anthropic-compatible",
 		"GitLawb OpenGateway":          "gitlawb-opengateway",
@@ -221,7 +218,7 @@ func TestListByTransportPreservesCatalogOrder(t *testing.T) {
 		TransportBedrock:         {"bedrock"},
 		TransportVertex:          {"vertex"},
 		TransportAnthropicCompat: {"minimax", "custom-anthropic-compatible"},
-		TransportOpenAICompat:    {"ollama-cloud", "ollama", "lmstudio", "openrouter", "groq", "deepseek", "together", "dashscope", "moonshot", "nvidia-nim", "mistral", "github", "xai", "venice", "xiaomi-mimo", "bankr", "zai", "gitlawb-opengateway", "atomic-chat", "chatgpt-proxy", "custom-openai-compatible"},
+		TransportOpenAICompat:    {"ollama-cloud", "ollama", "lmstudio", "openrouter", "groq", "deepseek", "together", "dashscope", "moonshot", "nvidia-nim", "mistral", "github", "xai", "venice", "bankr", "zai", "gitlawb-opengateway", "chatgpt-proxy", "custom-openai-compatible"},
 	}
 
 	for transport, wantIDs := range cases {
