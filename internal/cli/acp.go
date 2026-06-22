@@ -52,7 +52,7 @@ func runACP(args []string, stdout io.Writer, stderr io.Writer, deps appDeps) int
 			if err != nil {
 				return nil, nil, err
 			}
-			engine, err := buildExecSandboxEngine(workspaceRoot, resolved, deps, scope)
+			engine, err := buildExecSandboxEngine(workspaceRoot, resolved, deps, scope, false)
 			if err != nil {
 				return nil, nil, err
 			}

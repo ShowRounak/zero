@@ -105,6 +105,16 @@ type execOptions struct {
 	// additional write roots for this run. Unioned with
 	// config.SandboxConfig.AdditionalWriteRoots at scope construction time.
 	addDirs []string
+	// sandboxMode is the raw --sandbox flag value ("" = default enforce, "off"/
+	// "disabled" = container-trusted). Resolved (with the ZERO_SANDBOX env
+	// fallback) into a disable decision in runExec. Off by default; the disabled
+	// path is an EXPLICIT, loudly-warned opt-in meant ONLY for use inside an
+	// already-isolated container (CI / benchmark).
+	sandboxMode string
+	// deadlineRaw is the raw --deadline flag value (a Go duration like "900s").
+	// Resolved (with the ZERO_DEADLINE env fallback) into a wall-clock budget for
+	// the run. Empty = no deadline (current behavior).
+	deadlineRaw string
 }
 
 type execUsageError struct {
@@ -313,7 +323,8 @@ func runExec(args []string, stdout io.Writer, stderr io.Writer, deps appDeps) in
 	for _, tool := range tools.CoreToolsScoped(workspaceRoot, execScope) {
 		registry.Register(tool)
 	}
-	sandboxEngine, err := buildExecSandboxEngine(workspaceRoot, resolved, deps, execScope)
+	sandboxOff := resolveSandboxOff(options.sandboxMode)
+	sandboxEngine, err := buildExecSandboxEngine(workspaceRoot, resolved, deps, execScope, sandboxOff)
 	if err != nil {
 		return writeExecProviderError(stdout, stderr, options.outputFormat, "sandbox_error", err.Error())
 	}
@@ -458,6 +469,12 @@ func runExec(args []string, stdout io.Writer, stderr io.Writer, deps appDeps) in
 			return exitCrash
 		}
 	}
+	if sandboxOff {
+		writer.warning("Sandbox disabled (container-trusted mode): filesystem and network are unrestricted. Use only inside an isolated container.")
+		if writer.err != nil {
+			return exitCrash
+		}
+	}
 
 	sessionRecorder := execSessionRecorder{prepared: preparedSession}
 	// Surface a best-effort session-recording failure once, on every exit path.
@@ -475,6 +492,15 @@ func runExec(args []string, stdout io.Writer, stderr io.Writer, deps appDeps) in
 	// cleanly (the loop honors context cancellation) instead of being killed.
 	runCtx, stopSignals := signalContext()
 	defer stopSignals()
+	// --deadline / ZERO_DEADLINE bound the run by wall-clock time (Terminal-Bench
+	// budgets by time, not turns). When the deadline fires, runCtx is cancelled,
+	// the loop stops, and the run_end below reports status "deadline" with the
+	// trajectory already flushed. Empty = no deadline (unchanged behavior).
+	if runDeadline := resolveDeadline(options.deadlineRaw); runDeadline > 0 {
+		var cancelDeadline context.CancelFunc
+		runCtx, cancelDeadline = context.WithTimeout(runCtx, runDeadline)
+		defer cancelDeadline()
+	}
 	// --self-correct opts the run into the post-edit verify-and-correct loop. Off
 	// by default the corrector is nil, leaving the agent loop byte-identical. When
 	// on we verify with both the workspace test plan and LSP diagnostics over the
@@ -565,11 +591,18 @@ func runExec(args []string, stdout io.Writer, stderr io.Writer, deps appDeps) in
 	if err != nil {
 		// A Ctrl+C / SIGTERM cancellation is a clean shutdown, not a provider error.
 		if errors.Is(err, context.Canceled) || runCtx.Err() != nil {
-			sessionRecorder.append(sessions.EventError, map[string]any{"message": "interrupted"})
+			// Distinguish a wall-clock --deadline stop (status "deadline") from a
+			// Ctrl+C / SIGTERM interrupt; both are clean shutdowns, not errors, and
+			// the trajectory is flushed before exit either way.
+			cancelStatus, cancelMsg := "interrupted", "run cancelled by signal"
+			if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+				cancelStatus, cancelMsg = "deadline", "run stopped: wall-clock deadline reached"
+			}
+			sessionRecorder.append(sessions.EventError, map[string]any{"message": cancelStatus})
 			switch options.outputFormat {
 			case execOutputStreamJSON:
-				writer.errorEvent("interrupted", "run cancelled by signal", false)
-				writer.runEnd("interrupted", exitInterrupted)
+				writer.errorEvent(cancelStatus, cancelMsg, false)
+				writer.runEnd(cancelStatus, exitInterrupted)
 				if writer.err != nil {
 					return exitCrash
 				}
@@ -688,12 +721,63 @@ func registerToolSearchIfEligible(registry *tools.Registry, deferThreshold int, 
 	registry.Register(tools.NewToolSearchTool(registry))
 }
 
-func buildExecSandboxEngine(workspaceRoot string, resolved config.ResolvedConfig, deps appDeps, scope *sandbox.Scope) (*sandbox.Engine, error) {
+// resolveSandboxOff decides whether to disable confinement for an exec run.
+// Precedence: the --sandbox flag value wins; otherwise the ZERO_SANDBOX env var.
+// Recognized "off" values: off / disabled / none / 0 (case-insensitive). Anything
+// else, including empty, keeps the default enforcing sandbox.
+func resolveSandboxOff(flagValue string) bool {
+	value := strings.TrimSpace(flagValue)
+	if value == "" {
+		value = strings.TrimSpace(os.Getenv("ZERO_SANDBOX"))
+	}
+	switch strings.ToLower(value) {
+	case "off", "disabled", "none", "0":
+		return true
+	default:
+		return false
+	}
+}
+
+// resolveDeadline parses the run's wall-clock budget. Precedence: the --deadline
+// flag wins; otherwise the ZERO_DEADLINE env var. Empty = no deadline. An
+// unparseable or non-positive value is treated as no deadline.
+func resolveDeadline(flagValue string) time.Duration {
+	value := strings.TrimSpace(flagValue)
+	if value == "" {
+		value = strings.TrimSpace(os.Getenv("ZERO_DEADLINE"))
+	}
+	if value == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil || d <= 0 {
+		return 0
+	}
+	return d
+}
+
+// execSandboxPolicy builds the sandbox policy for an exec run. By default it is
+// the configured, enforcing policy (DefaultPolicy + config overlay). With
+// disableSandbox it becomes container-trusted: Mode=disabled, Network=allow,
+// EnforceWorkspace=false — flipping all three gates so both the in-process
+// Evaluate path and the OS wrapping are permissive. Pure, so the default-unchanged
+// and off-mode behavior are unit-tested directly.
+func execSandboxPolicy(cfg config.SandboxConfig, disableSandbox bool) sandbox.Policy {
+	policy := applyConfiguredSandboxPolicy(sandbox.DefaultPolicy(), cfg)
+	if disableSandbox {
+		policy.Mode = sandbox.ModeDisabled
+		policy.Network = sandbox.NetworkAllow
+		policy.EnforceWorkspace = false
+	}
+	return policy
+}
+
+func buildExecSandboxEngine(workspaceRoot string, resolved config.ResolvedConfig, deps appDeps, scope *sandbox.Scope, disableSandbox bool) (*sandbox.Engine, error) {
 	store, err := deps.newSandboxStore()
 	if err != nil {
 		return nil, err
 	}
-	policy := applyConfiguredSandboxPolicy(sandbox.DefaultPolicy(), resolved.Sandbox)
+	policy := execSandboxPolicy(resolved.Sandbox, disableSandbox)
 	backend := deps.selectSandboxBackend(sandbox.BackendOptions{})
 	return sandbox.NewEngine(sandbox.EngineOptions{
 		WorkspaceRoot: workspaceRoot,

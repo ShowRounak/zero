@@ -52,6 +52,24 @@ func parseExecArgs(args []string) (execOptions, bool, error) {
 			index = next
 		case strings.HasPrefix(arg, "--auto="):
 			options.autonomy = strings.TrimSpace(strings.TrimPrefix(arg, "--auto="))
+		case arg == "--sandbox":
+			value, next, err := nextFlagValue(args, index, arg)
+			if err != nil {
+				return options, false, err
+			}
+			options.sandboxMode = strings.TrimSpace(value)
+			index = next
+		case strings.HasPrefix(arg, "--sandbox="):
+			options.sandboxMode = strings.TrimSpace(strings.TrimPrefix(arg, "--sandbox="))
+		case arg == "--deadline":
+			value, next, err := nextFlagValue(args, index, arg)
+			if err != nil {
+				return options, false, err
+			}
+			options.deadlineRaw = strings.TrimSpace(value)
+			index = next
+		case strings.HasPrefix(arg, "--deadline="):
+			options.deadlineRaw = strings.TrimSpace(strings.TrimPrefix(arg, "--deadline="))
 		case arg == "--enabled-tools":
 			value, next, err := nextFlagValue(args, index, arg)
 			if err != nil {
