@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/Gitlawb/zero/internal/agent"
+	"github.com/Gitlawb/zero/internal/config"
 	"github.com/Gitlawb/zero/internal/modelregistry"
 	"github.com/Gitlawb/zero/internal/sessions"
 	"github.com/Gitlawb/zero/internal/usage"
@@ -273,6 +274,9 @@ func (m model) handleTurnsCommand(args string) (model, string) {
 		n = maxTurnsCeiling
 	}
 	m.agentOptions.MaxTurns = n
+	// Propagate the budget to spawned sub-agents / swarm members (which inherit the
+	// environment) so a delegated task gets the same budget, not config.json's default.
+	config.SetMaxTurnsEnv(n)
 	return m, m.turnsText()
 }
 

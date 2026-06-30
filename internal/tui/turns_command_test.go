@@ -1,12 +1,17 @@
 package tui
 
 import (
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 )
 
 func TestHandleTurnsCommand(t *testing.T) {
-	t.Run("sets a valid budget", func(t *testing.T) {
+	// Isolate the inherited-by-children budget env this command exports.
+	t.Setenv("ZERO_MAX_TURNS", "")
+
+	t.Run("sets a valid budget and exports it for children", func(t *testing.T) {
 		got, out := model{}.handleTurnsCommand("150")
 		if got.agentOptions.MaxTurns != 150 {
 			t.Fatalf("MaxTurns = %d, want 150", got.agentOptions.MaxTurns)
@@ -14,12 +19,18 @@ func TestHandleTurnsCommand(t *testing.T) {
 		if !strings.Contains(out, "150") {
 			t.Fatalf("output should report 150, got %q", out)
 		}
+		if env := os.Getenv("ZERO_MAX_TURNS"); env != "150" {
+			t.Fatalf("ZERO_MAX_TURNS = %q, want 150 (so sub-agents inherit it)", env)
+		}
 	})
 
-	t.Run("clamps above the ceiling", func(t *testing.T) {
+	t.Run("clamps above the ceiling (env too)", func(t *testing.T) {
 		got, _ := model{}.handleTurnsCommand("99999")
 		if got.agentOptions.MaxTurns != maxTurnsCeiling {
 			t.Fatalf("MaxTurns = %d, want clamp to %d", got.agentOptions.MaxTurns, maxTurnsCeiling)
+		}
+		if env := os.Getenv("ZERO_MAX_TURNS"); env != strconv.Itoa(maxTurnsCeiling) {
+			t.Fatalf("ZERO_MAX_TURNS = %q, want clamped %d", env, maxTurnsCeiling)
 		}
 	})
 

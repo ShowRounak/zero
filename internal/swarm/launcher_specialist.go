@@ -2,8 +2,10 @@ package swarm
 
 import (
 	"context"
+	"errors"
 
 	"github.com/Gitlawb/zero/internal/specialist"
+	"github.com/Gitlawb/zero/internal/tools"
 )
 
 // NewSpecialistLauncher adapts internal/specialist.Executor into a
@@ -55,6 +57,14 @@ func NewSpecialistLauncher(executor specialist.Executor) MemberLauncher {
 		})
 		if err != nil {
 			return MemberResult{}, err
+		}
+		if res.Result.Status == tools.StatusError {
+			// The child ran but its task FAILED (e.g. non-zero exit / max-turns).
+			// Surface it as a member failure so the swarm marks it [failed], not
+			// [done] — otherwise the orchestrator (which can't see the AGENTS panel)
+			// trusts incomplete work. Keep the session id so the failed member is
+			// still drillable, and carry its report as the failure message.
+			return MemberResult{SessionID: res.SessionID}, errors.New(res.Result.Output)
 		}
 		return MemberResult{Result: res.Result.Output, SessionID: res.SessionID}, nil
 	}}
