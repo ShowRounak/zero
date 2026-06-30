@@ -105,12 +105,36 @@ func NormalizeBaseURL(baseURL string, defaultBaseURL string, label string) (stri
 	return baseURL, nil
 }
 
-// HTTPClient returns the configured client or the process default.
+// sharedHTTPClient is the process-wide client used when a provider supplies none.
+// It tunes the default transport to defeat the stale-pooled-connection hang: Go
+// keeps idle keep-alive connections in a pool, and a later request can reuse one
+// the server/NAT has silently dropped. Because the model call is a POST (non-
+// idempotent), Go will NOT auto-retry it on a fresh connection — so it blocks
+// forever waiting for a response that never arrives. This is provider-agnostic
+// (every provider shares the default transport), which is why it reproduced on
+// BOTH chatgpt and ollama, and it surfaces on macOS far more than Linux because
+// macOS keeps dead pooled connections around longer.
+//
+//   - ResponseHeaderTimeout bounds the gap between finishing the request and the
+//     first response header, so a reused-dead connection fails fast (then the
+//     reconnect path re-dials) instead of hanging. It does NOT bound streaming
+//     after the 200 header arrives, so slow first tokens / long reasoning are
+//     unaffected (the stream-idle + content watchdogs cover that).
+//   - IdleConnTimeout is shortened so a connection that went idle across a pause
+//     is closed (and re-dialed fresh) rather than reused after it has gone stale.
+var sharedHTTPClient = func() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = 60 * time.Second
+	transport.IdleConnTimeout = 30 * time.Second
+	return &http.Client{Transport: transport}
+}()
+
+// HTTPClient returns the configured client or the shared, stall-hardened default.
 func HTTPClient(client *http.Client) *http.Client {
 	if client != nil {
 		return client
 	}
-	return http.DefaultClient
+	return sharedHTTPClient
 }
 
 // SendEvent writes a provider event without blocking cancellation cleanup.

@@ -20,6 +20,12 @@ import (
 const maxTurnsAnswer = "Agent reached maximum number of turns without a final answer."
 const maxTurnsFinalAnswerPrompt = "You have reached the tool-turn limit. Do not call tools. Give a concise final answer now: summarize what you completed, what you found, and any remaining blockers."
 
+// maxStreamStallRetries bounds how many times a turn that timed out (idle/stall)
+// WITH NO OUTPUT yet is re-issued on a fresh connection before giving up. Only
+// the no-output case is retried (a partial turn would duplicate), so this is a
+// safe recovery for a stalled/dead pooled connection.
+const maxStreamStallRetries = 2
+
 const (
 	toolResultMetaControl       = "control"
 	toolResultControlSpecReview = "spec_review_required"
@@ -259,6 +265,37 @@ func Run(ctx context.Context, prompt string, provider Provider, options Options)
 		if ctx.Err() != nil {
 			result.Messages = copyMessages(messages)
 			return result, ctx.Err()
+		}
+		// A stream idle/stall timeout with NO output forwarded yet this turn can be
+		// safely re-issued on a fresh connection — nothing was shown, so there's no
+		// duplication (this recovers the macOS stale-pooled-connection hang when it
+		// slips past the transport's response-header timeout). A turn that already
+		// streamed partial text/tool-calls is NOT retried (it would duplicate) and
+		// falls through to the error return below. Capped + exponential backoff.
+		for attempt := 1; attempt <= maxStreamStallRetries &&
+			isStreamTimeoutError(collected.Error) &&
+			collected.Text == "" && len(collected.ToolCalls) == 0; attempt++ {
+			if err := sleepWithContext(ctx, backoffFor(attempt)); err != nil {
+				result.Messages = copyMessages(messages)
+				return result, err
+			}
+			retryRequest := zeroruntime.CompletionRequest{
+				Messages:        copyMessages(messages),
+				Tools:           exposed,
+				ReasoningEffort: options.ReasoningEffort,
+			}
+			retryStream, retryErr := streamWithReconnect(ctx, provider, retryRequest, reconnectNoticeFor(options))
+			if retryErr != nil {
+				result.Messages = copyMessages(messages)
+				return result, retryErr
+			}
+			collected = zeroruntime.CollectStreamWithOptions(ctx, retryStream, zeroruntime.CollectOptions{
+				OnText:          options.OnText,
+				OnReasoning:     options.OnReasoning,
+				OnUsage:         options.OnUsage,
+				OnToolCallStart: options.OnToolCallStart,
+				OnToolCallDelta: options.OnToolCallDelta,
+			})
 		}
 		if collected.Error != "" {
 			result.Messages = copyMessages(messages)
