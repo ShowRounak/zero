@@ -11,6 +11,12 @@ tagged. Until then, source builds report the version `dev`.
 ### Added
 - `SECURITY.md` with a private vulnerability-reporting path, `CODE_OF_CONDUCT.md`, this changelog, and
   GitHub issue/PR templates.
+- Interactive `/theme` picker: bare `/theme` opens a popup that live-previews each palette as you move
+  and applies on select (Esc reverts).
+- Ten built-in color themes alongside the `dark`/`light` built-ins — `dracula`, `nord`, `gruvbox`,
+  `tokyo-night`, `catppuccin`, `one-dark`, `solarized-dark`, `rose-pine`, `everforest`, and
+  `solarized-light` — selectable via `/theme <name>`, `--theme <name>`, or `ZERO_THEME`. Every palette
+  is contrast-audited to WCAG AA. The built-in light theme was reworked for legibility.
 - `--theme {auto|dark|light}` flag for the TUI (previously only the `ZERO_THEME` env var existed).
 - "Accessibility / Appearance" section in the README documenting `NO_COLOR`, `ZERO_THEME`, `/theme`,
   and `ZERO_NO_FADE`.
