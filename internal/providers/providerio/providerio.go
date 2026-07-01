@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -68,7 +69,17 @@ func ContentStallTimeout(idleTimeout time.Duration) time.Duration {
 	if idleTimeout <= 0 {
 		return 0
 	}
-	return idleTimeout * 6 / 5
+	// 1.2× computed as idle + idle/5 (not idle*6/5), plus a clamp: a
+	// pathologically large ZERO_STREAM_IDLE_TIMEOUT could make idle*6 overflow
+	// int64 and wrap to a NEGATIVE duration, which would arm the content timer
+	// to fire immediately and abort every stream. Clamping to the max duration
+	// on overflow just means "effectively no content watchdog" — the sane
+	// result for an absurd idle timeout.
+	extra := idleTimeout / 5
+	if idleTimeout > math.MaxInt64-extra {
+		return math.MaxInt64
+	}
+	return idleTimeout + extra
 }
 
 // streamIdleTimeoutEnv is the global override for the stream idle timeout. It

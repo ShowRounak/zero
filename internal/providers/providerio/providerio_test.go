@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"runtime"
 	"strings"
@@ -201,6 +202,32 @@ func TestUpstreamUnreachable(t *testing.T) {
 				t.Errorf("missing reason %q in %q", testCase.wantReason, got)
 			}
 		})
+	}
+}
+
+// ContentStallTimeout is 1.2× the idle timeout, disabled (0) when idle is
+// disabled, and must never overflow to a negative duration for an absurdly
+// large idle timeout (which would arm the content timer to fire immediately
+// and abort every stream).
+func TestContentStallTimeout(t *testing.T) {
+	cases := []struct {
+		idle time.Duration
+		want time.Duration
+	}{
+		{5 * time.Minute, 6 * time.Minute},
+		{30 * time.Second, 36 * time.Second},
+		{100 * time.Millisecond, 120 * time.Millisecond},
+		{0, 0},
+		{-1, 0},
+	}
+	for _, c := range cases {
+		if got := ContentStallTimeout(c.idle); got != c.want {
+			t.Fatalf("ContentStallTimeout(%v) = %v, want %v", c.idle, got, c.want)
+		}
+	}
+	// Overflow guard: idle*6 would wrap negative; the clamp keeps it positive.
+	if got := ContentStallTimeout(math.MaxInt64); got <= 0 {
+		t.Fatalf("ContentStallTimeout(MaxInt64) = %v, must stay positive (no overflow wrap)", got)
 	}
 }
 
