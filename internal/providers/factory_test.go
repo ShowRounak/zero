@@ -322,8 +322,9 @@ func TestNewRoutesChatGPTCatalogToCodexProvider(t *testing.T) {
 
 func TestNewRoutesChatGPTCatalogWithStoredAccountID(t *testing.T) {
 	// The factory reads the stored OAuth token's Account field for the
-	// chatgpt-account-id header. Seed a token in a temp store and point
-	// ZERO_OAUTH_TOKENS_PATH at it so the factory picks it up.
+	// chatgpt-account-id header, from the login key the CALLER supplies in
+	// Options.OAuthLoginKey (the same key the bearer resolver bound). Seed a token
+	// in a temp store and point ZERO_OAUTH_TOKENS_PATH at it, then pass that key.
 	dir := t.TempDir()
 	t.Setenv("ZERO_OAUTH_TOKENS_PATH", dir+"/tokens.json")
 	store, err := newOAuthStoreForTest()
@@ -344,8 +345,9 @@ func TestNewRoutesChatGPTCatalogWithStoredAccountID(t *testing.T) {
 		CatalogID: "chatgpt",
 		Model:     "gpt-5",
 	}, Options{
-		HTTPClient: &http.Client{Transport: transport},
-		UserAgent:  "zero-factory-test",
+		HTTPClient:    &http.Client{Transport: transport},
+		UserAgent:     "zero-factory-test",
+		OAuthLoginKey: oauth.ProviderKey("chatgpt"),
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -413,4 +415,52 @@ func (transport *captureTransport) body() io.Reader {
 // from internal/cli.
 func newOAuthStoreForTest() (*oauth.Store, error) {
 	return oauth.NewStore(oauth.StoreOptions{})
+}
+
+// codexAccountForKey reads the chatgpt-account-id from the token stored under a
+// FIXED key — the key the caller (cli.oauthLoginForProfile) already bound for the
+// bearer token, passed through providers.Options.OAuthLoginKey. The account is
+// therefore always read from the same login that issued the bearer (no second,
+// independent selection). It re-reads per call, so an in-place token refresh (new
+// account claim under the SAME key) is picked up; an empty key (no OAuth login)
+// or a missing/account-less token yields "".
+func TestCodexAccountForKey(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("ZERO_OAUTH_TOKENS_PATH", dir+"/tokens.json")
+	store, err := newOAuthStoreForTest()
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if err := store.Save(oauth.ProviderKey("chatgpt"), oauth.Token{AccessToken: "tok-1", Account: "acc-catalog-7"}); err != nil {
+		t.Fatalf("Save chatgpt: %v", err)
+	}
+	// A different login WITHOUT an account claim, to prove the read stays on the
+	// requested key and never crosses to another login's account.
+	if err := store.Save(oauth.ProviderKey("codex"), oauth.Token{AccessToken: "tok-codex"}); err != nil {
+		t.Fatalf("Save codex: %v", err)
+	}
+
+	if got := codexAccountForKey(oauth.ProviderKey("chatgpt")); got != "acc-catalog-7" {
+		t.Fatalf("account = %q, want acc-catalog-7", got)
+	}
+	// The bound key's token has no account → "", NOT the other login's account.
+	if got := codexAccountForKey(oauth.ProviderKey("codex")); got != "" {
+		t.Fatalf("account = %q, want empty (must not cross to another login's account)", got)
+	}
+	// Empty key (no OAuth login) → header omitted.
+	if got := codexAccountForKey(""); got != "" {
+		t.Fatalf("account for empty key = %q, want empty", got)
+	}
+	// Unknown key → "".
+	if got := codexAccountForKey(oauth.ProviderKey("nope")); got != "" {
+		t.Fatalf("account for unknown key = %q, want empty", got)
+	}
+
+	// An in-place refresh under the bound key IS reflected per request.
+	if err := store.Save(oauth.ProviderKey("chatgpt"), oauth.Token{AccessToken: "tok-refreshed", Account: "acc-rotated"}); err != nil {
+		t.Fatalf("refresh chatgpt: %v", err)
+	}
+	if got := codexAccountForKey(oauth.ProviderKey("chatgpt")); got != "acc-rotated" {
+		t.Fatalf("account = %q, want acc-rotated (in-place refresh must be picked up)", got)
+	}
 }
